@@ -52,6 +52,22 @@ class State(rx.State):
     recipe_steps: list[dict] = []
     recipe_detail_error: str = ""
 
+    recipe_favorited: bool = False
+    favorite_error: str = ""
+
+    review_rating: str = "5"
+    review_text_input: str = ""
+    reviews_list: list[dict] = []
+    review_summary: str = ""
+    review_error: str = ""
+    submitting_review: bool = False
+    summarizing: bool = False
+
+    favorites_list: list[dict] = []
+    favorites_error: str = ""
+    loading_favorites: bool = False
+    showing_favorites: bool = False
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -202,6 +218,10 @@ class State(rx.State):
                 self.recipe_steps = json.loads(recipe["steps_json"]) if recipe["steps_json"] else []
             except (json.JSONDecodeError, TypeError):
                 self.recipe_steps = []
+            self.review_summary = ""
+            self.review_error = ""
+            self._fetch_reviews(recipe_id)
+            self._check_favorited(recipe_id)
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
 
@@ -209,6 +229,106 @@ class State(rx.State):
     def back_to_recommendations(self):
         self.selected_recipe = None
         self.recipe_steps = []
+        self.reviews_list = []
+        self.review_summary = ""
+
+    def _check_favorited(self, recipe_id: int):
+        try:
+            response = requests.get(f"{API_BASE}/favorites/{self.submitted_user_id}", timeout=10)
+        except requests.RequestException:
+            return
+        if response.status_code == 200:
+            self.recipe_favorited = any(f["id"] == recipe_id for f in response.json())
+
+    @rx.event
+    def toggle_favorite(self):
+        recipe_id = self.selected_recipe["id"]
+        try:
+            response = requests.post(
+                f"{API_BASE}/favorites/{self.submitted_user_id}/{recipe_id}/toggle", timeout=10
+            )
+        except requests.RequestException as e:
+            self.favorite_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.recipe_favorited = response.json()["favorited"]
+            self.favorite_error = ""
+        else:
+            self.favorite_error = f"실패 ({response.status_code})"
+
+    def _fetch_reviews(self, recipe_id: int):
+        try:
+            response = requests.get(f"{API_BASE}/reviews/{recipe_id}", timeout=10)
+        except requests.RequestException as e:
+            self.review_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.reviews_list = response.json()
+        else:
+            self.review_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def submit_review(self):
+        if not self.review_text_input.strip():
+            self.review_error = "후기 내용을 입력해주세요."
+            return
+        self.submitting_review = True
+        self.review_error = ""
+        recipe_id = self.selected_recipe["id"]
+        payload = {
+            "user_id": self.submitted_user_id,
+            "rating": int(self.review_rating),
+            "review_text": self.review_text_input.strip(),
+        }
+        try:
+            response = requests.post(f"{API_BASE}/reviews/{recipe_id}", json=payload, timeout=10)
+        except requests.RequestException as e:
+            self.review_error = f"서버에 연결할 수 없습니다: {e}"
+            self.submitting_review = False
+            return
+        if response.status_code == 200:
+            self.review_text_input = ""
+            self._fetch_reviews(recipe_id)
+        else:
+            self.review_error = f"등록 실패 ({response.status_code})"
+        self.submitting_review = False
+
+    @rx.event
+    def get_review_summary(self):
+        self.summarizing = True
+        recipe_id = self.selected_recipe["id"]
+        try:
+            response = requests.get(f"{API_BASE}/reviews/{recipe_id}/summary", timeout=30)
+        except requests.RequestException as e:
+            self.review_error = f"서버에 연결할 수 없습니다: {e}"
+            self.summarizing = False
+            return
+        if response.status_code == 200:
+            self.review_summary = response.json()["summary"] or "아직 요약할 후기가 없습니다."
+        else:
+            self.review_error = f"요약 실패 ({response.status_code})"
+        self.summarizing = False
+
+    @rx.event
+    def load_favorites(self):
+        self.loading_favorites = True
+        self.favorites_error = ""
+        try:
+            response = requests.get(f"{API_BASE}/favorites/{self.submitted_user_id}", timeout=10)
+        except requests.RequestException as e:
+            self.favorites_error = f"서버에 연결할 수 없습니다: {e}"
+            self.loading_favorites = False
+            return
+        if response.status_code == 200:
+            self.favorites_list = response.json()
+            self.showing_favorites = True
+        else:
+            self.favorites_error = f"조회 실패 ({response.status_code})"
+        self.loading_favorites = False
+
+    @rx.event
+    def close_favorites(self):
+        self.showing_favorites = False
 
 
 def labeled_input(label: str, field: str, placeholder: str = "") -> rx.Component:
@@ -386,13 +506,90 @@ def recipe_step_row(step: dict) -> rx.Component:
     )
 
 
+def review_row(r: dict) -> rx.Component:
+    return rx.vstack(
+        rx.hstack(
+            rx.text(r["username"], weight="bold", size="2"),
+            rx.text(f"별점 {r['rating']}/5", size="2", color="gray"),
+        ),
+        rx.text(r["review_text"], size="2"),
+        width="100%",
+        padding_y="1",
+        border_bottom="1px solid var(--gray-5)",
+    )
+
+
+def review_section() -> rx.Component:
+    return rx.vstack(
+        rx.divider(),
+        rx.heading("후기", size="4"),
+        rx.cond(
+            State.review_error != "",
+            rx.callout(State.review_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.reviews_list.length() > 0,
+            rx.vstack(rx.foreach(State.reviews_list, review_row), width="100%"),
+            rx.text("아직 후기가 없습니다.", color="gray", size="2"),
+        ),
+        rx.button(
+            "AI 후기 요약 보기",
+            size="2",
+            variant="soft",
+            loading=State.summarizing,
+            on_click=State.get_review_summary,
+        ),
+        rx.cond(
+            State.review_summary != "",
+            rx.callout(State.review_summary, color_scheme="blue", width="100%"),
+        ),
+        rx.hstack(
+            rx.select(
+                ["1", "2", "3", "4", "5"],
+                value=State.review_rating,
+                on_change=lambda v: State.set_field("review_rating", v),
+                width="80px",
+            ),
+            rx.input(
+                placeholder="후기를 남겨주세요",
+                value=State.review_text_input,
+                on_change=lambda v: State.set_field("review_text_input", v),
+                width="100%",
+            ),
+            width="100%",
+        ),
+        rx.button(
+            "후기 등록",
+            on_click=State.submit_review,
+            loading=State.submitting_review,
+            width="100%",
+        ),
+        width="100%",
+        spacing="3",
+    )
+
+
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
         rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
-        rx.heading(State.selected_recipe["menu_name"], size="6"),
+        rx.hstack(
+            rx.heading(State.selected_recipe["menu_name"], size="6"),
+            rx.spacer(),
+            rx.button(
+                rx.cond(State.recipe_favorited, "★ 즐겨찾기됨", "☆ 즐겨찾기"),
+                size="2",
+                variant="soft",
+                on_click=State.toggle_favorite,
+            ),
+            width="100%",
+        ),
         rx.text(
             f"{State.selected_recipe['category']} · {State.selected_recipe['calorie']}kcal",
             color="gray",
+        ),
+        rx.cond(
+            State.favorite_error != "",
+            rx.callout(State.favorite_error, color_scheme="red", width="100%"),
         ),
         rx.cond(
             State.recipe_detail_error != "",
@@ -404,6 +601,41 @@ def recipe_detail_view() -> rx.Component:
             width="100%",
             spacing="1",
         ),
+        review_section(),
+        spacing="4",
+        width="100%",
+        max_width="480px",
+    )
+
+
+def favorite_list_item(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(item["menu_name"], weight="medium"),
+        rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
+        rx.spacer(),
+        rx.button(
+            "상세보기",
+            size="1",
+            on_click=lambda: [State.close_favorites(), State.view_recipe(item["id"])],
+        ),
+        width="100%",
+        align="center",
+    )
+
+
+def favorites_list_view() -> rx.Component:
+    return rx.vstack(
+        rx.button("← 돌아가기", size="2", variant="soft", on_click=State.close_favorites),
+        rx.heading("즐겨찾기한 레시피", size="6"),
+        rx.cond(
+            State.favorites_error != "",
+            rx.callout(State.favorites_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.favorites_list.length() > 0,
+            rx.vstack(rx.foreach(State.favorites_list, favorite_list_item), width="100%", spacing="2"),
+            rx.text("즐겨찾기한 레시피가 없습니다.", color="gray"),
+        ),
         spacing="4",
         width="100%",
         max_width="480px",
@@ -412,7 +644,18 @@ def recipe_detail_view() -> rx.Component:
 
 def pantry_section() -> rx.Component:
     return rx.vstack(
-        rx.heading("내 냉장고", size="6"),
+        rx.hstack(
+            rx.heading("내 냉장고", size="6"),
+            rx.spacer(),
+            rx.button(
+                "즐겨찾기 보기",
+                size="2",
+                variant="soft",
+                loading=State.loading_favorites,
+                on_click=State.load_favorites,
+            ),
+            width="100%",
+        ),
         rx.text(f"user_id = {State.submitted_user_id}", color="gray", size="2"),
         rx.hstack(
             rx.input(
@@ -458,7 +701,11 @@ def pantry_section() -> rx.Component:
 def main_area() -> rx.Component:
     return rx.cond(
         State.submitted_user_id != None,  # noqa: E711
-        rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
+        rx.cond(
+            State.showing_favorites,
+            favorites_list_view(),
+            rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
+        ),
         onboarding_form(),
     )
 
