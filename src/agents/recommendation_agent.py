@@ -228,6 +228,11 @@ def get_candidate_recipes(cur, profile: dict) -> list[dict]:
     - 유저가 등록한 레시피(source_api == "user")는 추천(좋아요)이 USER_RECIPE_MIN_LIKES
       이상 쌓인 것만 후보에 포함한다 (검증 안 된 데이터가 그대로 추천되는 것을 막기 위함).
     - 영양정보 5개 필드가 전부 결측치 표기(예: 전부 1)로 보이는 레시피는 제외한다(#84).
+
+    성능(N+1 개선): 원래는 레시피마다 recipe_likes/recipe_tags를 개별 SELECT했는데(최대
+    1,148개 레시피 x 최대 3쿼리), 레시피 목록을 먼저 다 가져온 뒤 recipe_id IN (...)으로
+    좋아요 개수·알레르기 태그·영양군 태그를 한 번씩만 조회해서 딕셔너리로 인덱싱해두고
+    루프 안에서는 그 딕셔너리만 참조한다. 필터링/제외 판단 로직 자체는 그대로다.
     """
     user_allergies = set(a.strip() for a in profile.get("allergy", "").split(",") if a.strip())
 
@@ -237,34 +242,57 @@ def get_candidate_recipes(cur, profile: dict) -> list[dict]:
     )
     recipes = cur.fetchall()
 
+    recipe_ids = [row[0] for row in recipes]
+    if not recipe_ids:
+        return []
+    placeholders = ",".join("?" for _ in recipe_ids)
+
+    # 유저 등록 레시피(source_api == "user")만 좋아요 개수가 필요하다.
+    user_recipe_ids = [row[0] for row in recipes if row[9] == "user"]
+    like_counts: dict[int, int] = {}
+    if user_recipe_ids:
+        like_placeholders = ",".join("?" for _ in user_recipe_ids)
+        cur.execute(
+            f"SELECT recipe_id, COUNT(*) FROM recipe_likes WHERE recipe_id IN ({like_placeholders}) "
+            "GROUP BY recipe_id",
+            user_recipe_ids
+        )
+        like_counts = dict(cur.fetchall())
+
+    cur.execute(
+        f"SELECT recipe_id, tag_value FROM recipe_tags WHERE recipe_id IN ({placeholders}) "
+        "AND tag_type = 'allergy'",
+        recipe_ids
+    )
+    allergens_by_recipe: dict[int, set[str]] = {}
+    for recipe_id, tag_value in cur.fetchall():
+        allergens_by_recipe.setdefault(recipe_id, set()).add(tag_value)
+
+    cur.execute(
+        f"SELECT recipe_id, tag_value FROM recipe_tags WHERE recipe_id IN ({placeholders}) "
+        "AND tag_type = 'nutrition_group'",
+        recipe_ids
+    )
+    # 레시피당 nutrition_group 태그는 1개뿐이라, 원래 cur.fetchone()과 동일하게 처음 값만 쓴다.
+    nutrition_group_by_recipe: dict[int, str] = {}
+    for recipe_id, tag_value in cur.fetchall():
+        nutrition_group_by_recipe.setdefault(recipe_id, tag_value)
+
     candidates = []
     for (recipe_id, menu_name, cook_method, category, calorie, nutrients_json, steps_json,
          youtube_url, image_url, source_api, submitted_by) in recipes:
-        if source_api == "user":
-            cur.execute("SELECT COUNT(*) FROM recipe_likes WHERE recipe_id = ?", (recipe_id,))
-            like_count = cur.fetchone()[0]
-            if like_count < USER_RECIPE_MIN_LIKES:
-                continue
+        if source_api == "user" and like_counts.get(recipe_id, 0) < USER_RECIPE_MIN_LIKES:
+            continue
 
         if _has_placeholder_nutrition(calorie, nutrients_json):
             continue
 
-        cur.execute(
-            "SELECT tag_value FROM recipe_tags WHERE recipe_id = ? AND tag_type = 'allergy'",
-            (recipe_id,)
-        )
-        recipe_allergens = set(row[0] for row in cur.fetchall())
-
         # 사용자 알레르기와 겹치는 게 있으면 이 레시피는 제외
+        recipe_allergens = allergens_by_recipe.get(recipe_id, set())
         if user_allergies & recipe_allergens:
             continue
 
-        cur.execute(
-            "SELECT tag_value FROM recipe_tags WHERE recipe_id = ? AND tag_type = 'nutrition_group'",
-            (recipe_id,)
-        )
-        nutrition_row = cur.fetchone()
-        nutrition_group = nutrition_row[0] if nutrition_row else "미분류"
+        nutrition_group = nutrition_group_by_recipe.get(recipe_id, "미분류")
 
         candidates.append({
             "id": recipe_id,
@@ -443,17 +471,18 @@ def _is_valid_ingredient_name(name: str) -> bool:
     return bool(name) and bool(_HANGUL_RE.search(name)) and not _DIGIT_RE.search(name)
 
 
-def _get_weighted_recipe_ingredients(cur, recipe_id: int) -> list[tuple[str, float]]:
+def _get_weighted_recipe_ingredients_from_rows(rows: list[tuple]) -> list[tuple[str, float]]:
     """
     이 레시피의 (정리된 재료명, 수량가중치) 목록을 만든다. 조미료는 제외한다(랭킹용이라 -
     3원칙과 같은 이유, 화면 표시용 계산은 그대로 recipe_tags 기준을 쓰므로 영향 없음).
     같은 재료명이 여러 번 나오면(예: 냉잡채의 "간장" 2번) 수량을 합친다.
+
+    rows는 recipe_ingredients의 (name, amount, unit) 행들 - score_by_ingredients()에서
+    레시피마다 개별 조회하는 대신 배치로 미리 가져온 결과를 그대로 넘겨받기 위해, 조회
+    부분을 _get_weighted_recipe_ingredients()에서 분리했다.
     """
-    cur.execute(
-        "SELECT name, amount, unit FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,)
-    )
     weights: dict[str, float] = {}
-    for raw_name, amount, unit in cur.fetchall():
+    for raw_name, amount, unit in rows:
         name = clean_ingredient_name(raw_name or "")
         if not _is_valid_ingredient_name(name) or is_staple(name):
             continue
@@ -461,6 +490,14 @@ def _get_weighted_recipe_ingredients(cur, recipe_id: int) -> list[tuple[str, flo
         weight = amount if (unit == "g" and isinstance(amount, (int, float))) else DEFAULT_UNIT_WEIGHT
         weights[name_norm] = weights.get(name_norm, 0.0) + weight
     return list(weights.items())
+
+
+def _get_weighted_recipe_ingredients(cur, recipe_id: int) -> list[tuple[str, float]]:
+    """레시피 하나만 필요한 호출부(예: 배치 조회가 필요 없는 단건 조회)용 - 그대로 조회해서 넘긴다."""
+    cur.execute(
+        "SELECT name, amount, unit FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,)
+    )
+    return _get_weighted_recipe_ingredients_from_rows(cur.fetchall())
 
 
 def _count_matched_weight(user_norm: list[str], recipe_weighted: list[tuple[str, float]]) -> float:
@@ -621,16 +658,40 @@ def score_by_ingredients(cur, candidates: list[dict], user_ingredients: list[str
         if u.strip() and not is_staple(u.strip())
     ]
 
+    # 성능(N+1 개선): 원래는 후보 레시피마다 recipe_tags(ingredient)/recipe_ingredients를
+    # 개별 SELECT했다(최대 1,148개 x 2쿼리). 후보 id를 모아 recipe_id IN (...)으로 한 번씩만
+    # 조회해서 딕셔너리로 인덱싱해두고, 아래 루프에서는 그 딕셔너리만 참조한다. 매칭/점수
+    # 계산 로직(1:1 그리디 매칭, 가중치 계산 등) 자체는 그대로다.
+    candidate_ids = [c["id"] for c in candidates]
+    ingredient_tags_by_recipe: dict[int, list[str]] = {}
+    weighted_rows_by_recipe: dict[int, list[tuple]] = {}
+    if candidate_ids:
+        placeholders = ",".join("?" for _ in candidate_ids)
+
+        cur.execute(
+            f"SELECT recipe_id, tag_value FROM recipe_tags WHERE recipe_id IN ({placeholders}) "
+            "AND tag_type = 'ingredient'",
+            candidate_ids
+        )
+        for recipe_id, tag_value in cur.fetchall():
+            ingredient_tags_by_recipe.setdefault(recipe_id, []).append(tag_value)
+
+        cur.execute(
+            f"SELECT recipe_id, name, amount, unit FROM recipe_ingredients "
+            f"WHERE recipe_id IN ({placeholders})",
+            candidate_ids
+        )
+        for recipe_id, name, amount, unit in cur.fetchall():
+            weighted_rows_by_recipe.setdefault(recipe_id, []).append((name, amount, unit))
+
     scored = []
     for c in candidates:
-        cur.execute(
-            "SELECT tag_value FROM recipe_tags WHERE recipe_id = ? AND tag_type = 'ingredient'",
-            (c["id"],)
-        )
         # 기본 조미료는 매칭 대상(랭킹)에서 제외 (거의 모든 레시피에 있어서 변별력이 없음).
         # 화면에 보여주는 "부족한 재료" 쪽은 조미료도 포함해서 따로 정확하게 계산한다 (3원칙).
         recipe_ingredients_norm = [
-            normalize_ingredient(row[0]) for row in cur.fetchall() if not is_staple(row[0])
+            normalize_ingredient(tag_value)
+            for tag_value in ingredient_tags_by_recipe.get(c["id"], [])
+            if not is_staple(tag_value)
         ]
 
         # 1:1 그리디 매칭으로 겹침 개수를 센다 (#70) - 유저 재료 하나·레시피 재료 하나가
@@ -648,8 +709,8 @@ def score_by_ingredients(cur, candidates: list[dict], user_ingredients: list[str
 
         # 7차 개정(#73): 겹침 "개수"가 같은 후보들 사이에서, 그 겹침이 주재료급(수량 많음)인지
         # 고명급(수량 적음)인지를 구분하는 가중치. recipe_tags가 아니라 수량 정보가 있는
-        # recipe_ingredients 테이블을 따로 조회한다.
-        recipe_weighted = _get_weighted_recipe_ingredients(cur, c["id"])
+        # recipe_ingredients 테이블을 배치 조회 결과에서 가져온다.
+        recipe_weighted = _get_weighted_recipe_ingredients_from_rows(weighted_rows_by_recipe.get(c["id"], []))
         matched_weight = _count_matched_weight(user_norm, recipe_weighted)
         total_weight = sum(w for _, w in recipe_weighted)
         weight_ratio = (matched_weight / total_weight) if total_weight > 0 else 0.0
