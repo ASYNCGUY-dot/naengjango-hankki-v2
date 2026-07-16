@@ -4,6 +4,8 @@ FastAPI 백엔드(api/routers/profile.py, api/routers/pantry.py)를 그대로 �
 새 로직을 만드는 게 아니라, 이미 검증된 백엔드에 화면을 연결하는 작업이다.
 """
 
+import json
+
 import reflex as rx
 import requests
 
@@ -41,6 +43,14 @@ class State(rx.State):
     safety_expiry_status: str = ""
     safety_checking: bool = False
     safety_error: str = ""
+
+    recommendations: list[dict] = []
+    recommending: bool = False
+    recommend_error: str = ""
+
+    selected_recipe: dict | None = None
+    recipe_steps: list[dict] = []
+    recipe_detail_error: str = ""
 
     @rx.event
     def set_field(self, field: str, value: str):
@@ -155,6 +165,50 @@ class State(rx.State):
         else:
             self.safety_error = f"확인 실패 ({response.status_code})"
         self.safety_checking = False
+
+    @rx.event
+    def get_recommendations(self):
+        self.recommending = True
+        self.recommend_error = ""
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/{self.submitted_user_id}",
+                params={"limit": 5},
+                # 추천 계산이 레시피 1,148개를 훑는 방식이라 느리다(수 초~십수 초) - 넉넉하게 잡는다.
+                timeout=60,
+            )
+        except requests.RequestException as e:
+            self.recommend_error = f"서버에 연결할 수 없습니다: {e}"
+            self.recommending = False
+            return
+        if response.status_code == 200:
+            self.recommendations = response.json()
+        else:
+            self.recommend_error = f"추천 실패 ({response.status_code})"
+        self.recommending = False
+
+    @rx.event
+    def view_recipe(self, recipe_id: int):
+        self.recipe_detail_error = ""
+        try:
+            response = requests.get(f"{API_BASE}/recommendation/recipes/{recipe_id}", timeout=10)
+        except requests.RequestException as e:
+            self.recipe_detail_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            recipe = response.json()
+            self.selected_recipe = recipe
+            try:
+                self.recipe_steps = json.loads(recipe["steps_json"]) if recipe["steps_json"] else []
+            except (json.JSONDecodeError, TypeError):
+                self.recipe_steps = []
+        else:
+            self.recipe_detail_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def back_to_recommendations(self):
+        self.selected_recipe = None
+        self.recipe_steps = []
 
 
 def labeled_input(label: str, field: str, placeholder: str = "") -> rx.Component:
@@ -271,6 +325,91 @@ def safety_result_panel() -> rx.Component:
     )
 
 
+def recommendation_card(item: dict) -> rx.Component:
+    return rx.vstack(
+        rx.hstack(
+            rx.text(item["menu_name"], weight="bold", size="4"),
+            rx.spacer(),
+            rx.cond(
+                item["qualifies"],
+                rx.badge("보유재료 활용", color_scheme="green"),
+                rx.badge("참고용", color_scheme="gray"),
+            ),
+            width="100%",
+        ),
+        rx.text(
+            f"{item['category']} · {item['calorie']}kcal · 겹치는 재료 {item['ingredient_overlap']}개",
+            size="2",
+            color="gray",
+        ),
+        rx.button("상세보기 (조리단계)", size="2", on_click=lambda: State.view_recipe(item["id"])),
+        border="1px solid var(--gray-6)",
+        border_radius="8px",
+        padding="3",
+        width="100%",
+        spacing="2",
+    )
+
+
+def recommendation_section() -> rx.Component:
+    return rx.vstack(
+        rx.divider(),
+        rx.heading("오늘의 추천", size="6"),
+        rx.button(
+            "추천 받기",
+            on_click=State.get_recommendations,
+            loading=State.recommending,
+            width="100%",
+        ),
+        rx.cond(
+            State.recommend_error != "",
+            rx.callout(State.recommend_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.recommendations.length() > 0,
+            rx.vstack(
+                rx.foreach(State.recommendations, recommendation_card),
+                width="100%",
+                spacing="3",
+            ),
+        ),
+        width="100%",
+        spacing="4",
+    )
+
+
+def recipe_step_row(step: dict) -> rx.Component:
+    return rx.vstack(
+        rx.text(step["text"], size="2"),
+        width="100%",
+        padding_y="2",
+    )
+
+
+def recipe_detail_view() -> rx.Component:
+    return rx.vstack(
+        rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
+        rx.heading(State.selected_recipe["menu_name"], size="6"),
+        rx.text(
+            f"{State.selected_recipe['category']} · {State.selected_recipe['calorie']}kcal",
+            color="gray",
+        ),
+        rx.cond(
+            State.recipe_detail_error != "",
+            rx.callout(State.recipe_detail_error, color_scheme="red", width="100%"),
+        ),
+        rx.heading("조리 단계", size="4"),
+        rx.vstack(
+            rx.foreach(State.recipe_steps, recipe_step_row),
+            width="100%",
+            spacing="1",
+        ),
+        spacing="4",
+        width="100%",
+        max_width="480px",
+    )
+
+
 def pantry_section() -> rx.Component:
     return rx.vstack(
         rx.heading("내 냉장고", size="6"),
@@ -309,9 +448,18 @@ def pantry_section() -> rx.Component:
             rx.callout(State.safety_error, color_scheme="red", width="100%"),
         ),
         safety_result_panel(),
+        recommendation_section(),
         spacing="4",
         width="100%",
         max_width="480px",
+    )
+
+
+def main_area() -> rx.Component:
+    return rx.cond(
+        State.submitted_user_id != None,  # noqa: E711
+        rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
+        onboarding_form(),
     )
 
 
@@ -320,7 +468,7 @@ def index() -> rx.Component:
         rx.color_mode.button(position="top-right"),
         rx.vstack(
             rx.heading("냉장고 한끼 - 온보딩", size="8"),
-            rx.cond(State.submitted_user_id != None, pantry_section(), onboarding_form()),  # noqa: E711
+            main_area(),
             spacing="5",
             justify="center",
             align="center",
