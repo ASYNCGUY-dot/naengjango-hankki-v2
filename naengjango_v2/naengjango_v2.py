@@ -1,6 +1,6 @@
-"""냉장고 한끼 V2 - 온보딩(프로필 입력) 화면.
+"""냉장고 한끼 V2 - 온보딩(프로필 입력) + 재료 태깅(내 냉장고) 화면.
 
-FastAPI 백엔드(api/routers/profile.py, POST /profile)를 그대로 호출한다.
+FastAPI 백엔드(api/routers/profile.py, api/routers/pantry.py)를 그대로 호출한다.
 새 로직을 만드는 게 아니라, 이미 검증된 백엔드에 화면을 연결하는 작업이다.
 """
 
@@ -30,6 +30,11 @@ class State(rx.State):
     is_submitting: bool = False
     error_message: str = ""
     submitted_user_id: int | None = None
+
+    pantry_items: list[dict] = []
+    new_ingredient_name: str = ""
+    new_ingredient_expiry: str = ""
+    pantry_error: str = ""
 
     @rx.event
     def set_field(self, field: str, value: str):
@@ -68,9 +73,62 @@ class State(rx.State):
 
         if response.status_code == 200:
             self.submitted_user_id = response.json()["user_id"]
+            self._fetch_pantry()
         else:
             self.error_message = f"저장 실패 ({response.status_code}): {response.text}"
         self.is_submitting = False
+
+    def _fetch_pantry(self):
+        """내 냉장고 목록을 다시 불러온다 (add/remove 후 호출하는 내부 헬퍼)."""
+        if self.submitted_user_id is None:
+            return
+        try:
+            response = requests.get(f"{API_BASE}/pantry/{self.submitted_user_id}", timeout=10)
+        except requests.RequestException as e:
+            self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.pantry_items = response.json()
+            self.pantry_error = ""
+        else:
+            self.pantry_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def add_ingredient(self):
+        if not self.new_ingredient_name.strip():
+            self.pantry_error = "재료 이름을 입력해주세요."
+            return
+        payload = {
+            "name": self.new_ingredient_name.strip(),
+            "expiry_date": self.new_ingredient_expiry.strip() or None,
+        }
+        try:
+            response = requests.post(
+                f"{API_BASE}/pantry/{self.submitted_user_id}", json=payload, timeout=10
+            )
+        except requests.RequestException as e:
+            self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.new_ingredient_name = ""
+            self.new_ingredient_expiry = ""
+            self._fetch_pantry()
+        else:
+            self.pantry_error = f"추가 실패 ({response.status_code})"
+
+    @rx.event
+    def remove_ingredient(self, ingredient_id: int):
+        try:
+            response = requests.delete(
+                f"{API_BASE}/pantry/{self.submitted_user_id}/{ingredient_id}", timeout=10
+            )
+        except requests.RequestException as e:
+            self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self._fetch_pantry()
+        else:
+            self.pantry_error = f"삭제 실패 ({response.status_code})"
 
 
 def labeled_input(label: str, field: str, placeholder: str = "") -> rx.Component:
@@ -130,12 +188,63 @@ def onboarding_form() -> rx.Component:
     )
 
 
-def success_view() -> rx.Component:
+def pantry_item_row(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(item["name"], weight="medium"),
+        rx.text(
+            rx.cond(item["expiry_date"], item["expiry_date"], "유통기한 미입력"),
+            size="2",
+            color="gray",
+        ),
+        rx.spacer(),
+        rx.button(
+            "삭제",
+            size="1",
+            color_scheme="red",
+            variant="soft",
+            on_click=lambda: State.remove_ingredient(item["id"]),
+        ),
+        width="100%",
+        align="center",
+    )
+
+
+def pantry_section() -> rx.Component:
     return rx.vstack(
-        rx.heading("프로필이 저장됐습니다!", size="6"),
-        rx.text(f"user_id = {State.submitted_user_id}"),
-        rx.text("다음 화면(재료 태깅)은 곧 이어서 만듭니다.", color="gray"),
-        spacing="3",
+        rx.heading("내 냉장고", size="6"),
+        rx.text(f"user_id = {State.submitted_user_id}", color="gray", size="2"),
+        rx.hstack(
+            rx.input(
+                placeholder="재료 이름 (예: 두부)",
+                value=State.new_ingredient_name,
+                on_change=lambda v: State.set_field("new_ingredient_name", v),
+                width="100%",
+            ),
+            rx.input(
+                placeholder="유통기한 YYYY-MM-DD (선택)",
+                value=State.new_ingredient_expiry,
+                on_change=lambda v: State.set_field("new_ingredient_expiry", v),
+                width="100%",
+            ),
+            rx.button("추가", on_click=State.add_ingredient),
+            width="100%",
+        ),
+        rx.cond(
+            State.pantry_error != "",
+            rx.callout(State.pantry_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.pantry_items.length() > 0,
+            rx.vstack(
+                rx.foreach(State.pantry_items, pantry_item_row),
+                width="100%",
+                spacing="2",
+            ),
+            rx.text("아직 등록된 재료가 없습니다.", color="gray"),
+        ),
+        spacing="4",
+        width="100%",
+        max_width="480px",
     )
 
 
@@ -144,7 +253,7 @@ def index() -> rx.Component:
         rx.color_mode.button(position="top-right"),
         rx.vstack(
             rx.heading("냉장고 한끼 - 온보딩", size="8"),
-            rx.cond(State.submitted_user_id != None, success_view(), onboarding_form()),  # noqa: E711
+            rx.cond(State.submitted_user_id != None, pantry_section(), onboarding_form()),  # noqa: E711
             spacing="5",
             justify="center",
             align="center",
