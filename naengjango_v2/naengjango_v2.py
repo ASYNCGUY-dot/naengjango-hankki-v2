@@ -75,6 +75,11 @@ class State(rx.State):
     loading_favorites: bool = False
     showing_favorites: bool = False
 
+    popular_categories: list[str] = []
+    popular_videos_list: list[dict] = []
+    selected_popular_category: str = ""
+    popular_error: str = ""
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -123,9 +128,42 @@ class State(rx.State):
         if response.status_code == 200:
             self.submitted_user_id = response.json()["user_id"]
             self._fetch_pantry()
+            self._fetch_popular_categories()
         else:
             self.error_message = f"저장 실패 ({response.status_code}): {response.text}"
         self.is_submitting = False
+
+    def _fetch_popular_categories(self):
+        try:
+            response = requests.get(f"{API_BASE}/popular-videos/categories", timeout=10)
+        except requests.RequestException as e:
+            self.popular_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            categories = response.json()
+            self.popular_categories = categories
+            if categories:
+                self.selected_popular_category = categories[0]
+                self._fetch_popular_videos(categories[0])
+        else:
+            self.popular_error = f"조회 실패 ({response.status_code})"
+
+    def _fetch_popular_videos(self, category: str):
+        try:
+            response = requests.get(f"{API_BASE}/popular-videos/{category}", params={"limit": 5}, timeout=10)
+        except requests.RequestException as e:
+            self.popular_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.popular_videos_list = response.json()
+            self.popular_error = ""
+        else:
+            self.popular_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def select_popular_category(self, category: str):
+        self.selected_popular_category = category
+        self._fetch_popular_videos(category)
 
     def _fetch_pantry(self):
         """내 냉장고 목록을 다시 불러온다 (add/remove 후 호출하는 내부 헬퍼)."""
@@ -759,6 +797,62 @@ def favorites_list_view() -> rx.Component:
     )
 
 
+def popular_video_card(v: dict) -> rx.Component:
+    return rx.card(
+        rx.link(
+            rx.hstack(
+                rx.image(src=v["thumbnail_url"], width="100px", height="70px",
+                          object_fit="cover", border_radius="8px"),
+                rx.vstack(
+                    rx.text(v["video_title"], weight="medium", size="2"),
+                    rx.text(v["channel_title"], size="1", color="gray"),
+                    rx.text(f"조회수 {v['view_count']:,}", size="1", color="gray"),
+                    align="start",
+                    spacing="1",
+                ),
+                width="100%",
+                align="center",
+            ),
+            href=v["video_url"],
+            is_external=True,
+        ),
+        width="100%",
+    )
+
+
+def popular_videos_section() -> rx.Component:
+    return rx.cond(
+        State.popular_categories.length() > 0,
+        rx.vstack(
+            rx.divider(),
+            rx.heading("인기 레시피 영상", size="6"),
+            rx.hstack(
+                rx.foreach(
+                    State.popular_categories,
+                    lambda c: rx.button(
+                        c, size="1",
+                        variant=rx.cond(State.selected_popular_category == c, "solid", "soft"),
+                        on_click=lambda: State.select_popular_category(c),
+                    ),
+                ),
+                wrap="wrap",
+                width="100%",
+            ),
+            rx.cond(
+                State.popular_error != "",
+                rx.callout(State.popular_error, color_scheme="red", width="100%"),
+            ),
+            rx.vstack(
+                rx.foreach(State.popular_videos_list, popular_video_card),
+                width="100%",
+                spacing="2",
+            ),
+            width="100%",
+            spacing="3",
+        ),
+    )
+
+
 def pantry_section() -> rx.Component:
     return rx.vstack(
         rx.hstack(
@@ -809,6 +903,7 @@ def pantry_section() -> rx.Component:
         ),
         safety_result_panel(),
         recommendation_section(),
+        popular_videos_section(),
         spacing="4",
         width="100%",
         max_width="480px",

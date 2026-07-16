@@ -1,6 +1,16 @@
 from fastapi import FastAPI
 
-from api.routers import auth, favorite, pantry, profile, recommendation, review, safety, substitution
+from api.routers import (
+    auth,
+    favorite,
+    pantry,
+    popular_videos,
+    profile,
+    recommendation,
+    review,
+    safety,
+    substitution,
+)
 
 app = FastAPI(title="냉장고 한끼 V2 API")
 
@@ -12,6 +22,7 @@ app.include_router(recommendation.router)
 app.include_router(favorite.router)
 app.include_router(review.router)
 app.include_router(substitution.router)
+app.include_router(popular_videos.router)
 
 
 @app.get("/health")
