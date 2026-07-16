@@ -392,30 +392,33 @@ def onboarding_form() -> rx.Component:
 
 
 def pantry_item_row(item: dict) -> rx.Component:
-    return rx.hstack(
-        rx.text(item["name"], weight="medium"),
-        rx.text(
-            rx.cond(item["expiry_date"], item["expiry_date"], "유통기한 미입력"),
-            size="2",
-            color="gray",
-        ),
-        rx.spacer(),
-        rx.button(
-            "안전확인",
-            size="1",
-            variant="soft",
-            loading=State.safety_checking,
-            on_click=lambda: State.check_safety(item["name"], item["expiry_date"]),
-        ),
-        rx.button(
-            "삭제",
-            size="1",
-            color_scheme="red",
-            variant="soft",
-            on_click=lambda: State.remove_ingredient(item["id"]),
+    return rx.card(
+        rx.hstack(
+            rx.text(item["name"], weight="medium"),
+            rx.text(
+                rx.cond(item["expiry_date"], item["expiry_date"], "유통기한 미입력"),
+                size="2",
+                color="gray",
+            ),
+            rx.spacer(),
+            rx.button(
+                "안전확인",
+                size="1",
+                variant="soft",
+                loading=State.safety_checking,
+                on_click=lambda: State.check_safety(item["name"], item["expiry_date"]),
+            ),
+            rx.button(
+                "삭제",
+                size="1",
+                color_scheme="red",
+                variant="soft",
+                on_click=lambda: State.remove_ingredient(item["id"]),
+            ),
+            width="100%",
+            align="center",
         ),
         width="100%",
-        align="center",
     )
 
 
@@ -449,28 +452,35 @@ def safety_result_panel() -> rx.Component:
 
 
 def recommendation_card(item: dict) -> rx.Component:
-    return rx.vstack(
-        rx.hstack(
-            rx.text(item["menu_name"], weight="bold", size="4"),
-            rx.spacer(),
+    return rx.card(
+        rx.vstack(
             rx.cond(
-                item["qualifies"],
-                rx.badge("보유재료 활용", color_scheme="green"),
-                rx.badge("참고용", color_scheme="gray"),
+                item["image_url"],
+                rx.image(src=item["image_url"], width="100%", height="140px",
+                          object_fit="cover", border_radius="12px"),
             ),
+            rx.hstack(
+                rx.text(item["menu_name"], weight="bold", size="4"),
+                rx.spacer(),
+                rx.cond(
+                    item["qualifies"],
+                    rx.badge("보유재료 활용", color_scheme="grass"),
+                    rx.badge("참고용", color_scheme="gray"),
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.text(
+                f"{item['category']} · {item['calorie']}kcal · 겹치는 재료 {item['ingredient_overlap']}개",
+                size="2",
+                color="gray",
+            ),
+            rx.button("상세보기 (조리단계)", size="2", width="100%",
+                      on_click=lambda: State.view_recipe(item["id"])),
+            spacing="2",
             width="100%",
         ),
-        rx.text(
-            f"{item['category']} · {item['calorie']}kcal · 겹치는 재료 {item['ingredient_overlap']}개",
-            size="2",
-            color="gray",
-        ),
-        rx.button("상세보기 (조리단계)", size="2", on_click=lambda: State.view_recipe(item["id"])),
-        border="1px solid var(--gray-6)",
-        border_radius="8px",
-        padding="3",
         width="100%",
-        spacing="2",
     )
 
 
@@ -510,15 +520,17 @@ def recipe_step_row(step: dict) -> rx.Component:
 
 
 def review_row(r: dict) -> rx.Component:
-    return rx.vstack(
-        rx.hstack(
-            rx.text(r["username"], weight="bold", size="2"),
-            rx.text(f"별점 {r['rating']}/5", size="2", color="gray"),
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.text(r["username"], weight="bold", size="2"),
+                rx.badge(f"★ {r['rating']}/5", color_scheme="amber"),
+            ),
+            rx.text(r["review_text"], size="2"),
+            width="100%",
+            spacing="1",
         ),
-        rx.text(r["review_text"], size="2"),
         width="100%",
-        padding_y="1",
-        border_bottom="1px solid var(--gray-5)",
     )
 
 
@@ -575,6 +587,11 @@ def review_section() -> rx.Component:
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
         rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
+        rx.cond(
+            State.selected_recipe["image_url"],
+            rx.image(src=State.selected_recipe["image_url"], width="100%", height="200px",
+                      object_fit="cover", border_radius="12px"),
+        ),
         rx.hstack(
             rx.heading(State.selected_recipe["menu_name"], size="6"),
             rx.spacer(),
@@ -612,17 +629,20 @@ def recipe_detail_view() -> rx.Component:
 
 
 def favorite_list_item(item: dict) -> rx.Component:
-    return rx.hstack(
-        rx.text(item["menu_name"], weight="medium"),
-        rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
-        rx.spacer(),
-        rx.button(
-            "상세보기",
-            size="1",
-            on_click=lambda: [State.close_favorites(), State.view_recipe(item["id"])],
+    return rx.card(
+        rx.hstack(
+            rx.text(item["menu_name"], weight="medium"),
+            rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
+            rx.spacer(),
+            rx.button(
+                "상세보기",
+                size="1",
+                on_click=lambda: [State.close_favorites(), State.view_recipe(item["id"])],
+            ),
+            width="100%",
+            align="center",
         ),
         width="100%",
-        align="center",
     )
 
 
@@ -713,17 +733,60 @@ def main_area() -> rx.Component:
     )
 
 
+def bottom_nav() -> rx.Component:
+    return rx.cond(
+        (State.submitted_user_id != None) & (State.selected_recipe == None),  # noqa: E711
+        rx.hstack(
+            rx.button(
+                rx.vstack(rx.icon("refrigerator", size=18), rx.text("냉장고", size="1"), spacing="0"),
+                variant="ghost", on_click=State.close_favorites, flex="1",
+            ),
+            rx.button(
+                rx.vstack(rx.icon("sparkles", size=18), rx.text("추천", size="1"), spacing="0"),
+                variant="ghost", on_click=State.get_recommendations, flex="1",
+            ),
+            rx.button(
+                rx.vstack(rx.icon("heart", size=18), rx.text("즐겨찾기", size="1"), spacing="0"),
+                variant="ghost", on_click=State.load_favorites, flex="1",
+            ),
+            width="100%",
+            max_width="480px",
+            position="fixed",
+            bottom="0",
+            left="50%",
+            transform="translateX(-50%)",
+            background="var(--color-panel-solid)",
+            border_top="1px solid var(--gray-5)",
+            padding_y="2",
+            justify="center",
+        ),
+    )
+
+
+def app_header() -> rx.Component:
+    return rx.hstack(
+        rx.image(src="/logo.svg", height="64px"),
+        rx.spacer(),
+        rx.color_mode.button(),
+        width="100%",
+        max_width="480px",
+        align="center",
+        padding_y="2",
+    )
+
+
 def index() -> rx.Component:
     return rx.container(
-        rx.color_mode.button(position="top-right"),
         rx.vstack(
-            rx.heading("냉장고 한끼 - 온보딩", size="8"),
+            app_header(),
             main_area(),
             spacing="5",
             justify="center",
             align="center",
             min_height="85vh",
+            padding_bottom="8em",
         ),
+        bottom_nav(),
     )
 
 
