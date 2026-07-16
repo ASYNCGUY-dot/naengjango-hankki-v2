@@ -25,11 +25,11 @@ jobs:
       - name: 코드 가져오기
         uses: actions/checkout@v4
 
-      # 2) 파이썬 설치 (지수님 로컬 가상환경과 맞춰 3.11 사용)
-      - name: 파이썬 3.11 설치
+      # 2) 파이썬 설치 (지수님 로컬 가상환경과 맞춰 3.12 사용)
+      - name: 파이썬 3.12 설치
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
 
       # 3) requirements.txt에 적힌 라이브러리들을 설치한다
