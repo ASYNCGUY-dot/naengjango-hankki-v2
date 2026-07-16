@@ -86,6 +86,19 @@ class State(rx.State):
     catalog_error: str = ""
     catalog_searching: bool = False
 
+    my_recipes_list: list[dict] = []
+    my_recipes_error: str = ""
+    loading_my_recipes: bool = False
+    showing_my_recipes: bool = False
+    my_recipe_menu_name: str = ""
+    my_recipe_category: str = ""
+    my_recipe_calorie: str = ""
+    my_recipe_ingredients: str = ""
+    my_recipe_steps: str = ""
+    my_recipe_editing_id: int | None = None
+    my_recipe_form_error: str = ""
+    my_recipe_submitting: bool = False
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -441,6 +454,7 @@ class State(rx.State):
         if response.status_code == 200:
             self.favorites_list = response.json()
             self.showing_favorites = True
+            self.showing_my_recipes = False
         else:
             self.favorites_error = f"조회 실패 ({response.status_code})"
         self.loading_favorites = False
@@ -448,6 +462,128 @@ class State(rx.State):
     @rx.event
     def close_favorites(self):
         self.showing_favorites = False
+        self.showing_my_recipes = False
+
+    def _fetch_my_recipes(self):
+        try:
+            response = requests.get(
+                f"{API_BASE}/my-recipes", params={"user_id": self.submitted_user_id}, timeout=10
+            )
+        except requests.RequestException as e:
+            self.my_recipes_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.my_recipes_list = response.json()
+            self.my_recipes_error = ""
+        else:
+            self.my_recipes_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def load_my_recipes(self):
+        self.loading_my_recipes = True
+        self._fetch_my_recipes()
+        self.showing_favorites = False
+        self.showing_my_recipes = True
+        self.loading_my_recipes = False
+
+    def _reset_my_recipe_form(self):
+        self.my_recipe_menu_name = ""
+        self.my_recipe_category = ""
+        self.my_recipe_calorie = ""
+        self.my_recipe_ingredients = ""
+        self.my_recipe_steps = ""
+        self.my_recipe_editing_id = None
+        self.my_recipe_form_error = ""
+
+    @rx.event
+    def close_my_recipes(self):
+        self.showing_my_recipes = False
+        self._reset_my_recipe_form()
+
+    @rx.event
+    def start_edit_my_recipe(self, recipe_id: int):
+        try:
+            response = requests.get(
+                f"{API_BASE}/my-recipes/{recipe_id}",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.my_recipes_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code != 200:
+            self.my_recipes_error = f"조회 실패 ({response.status_code})"
+            return
+        detail = response.json()
+        self.my_recipe_menu_name = detail["menu_name"]
+        self.my_recipe_category = detail["category"] or ""
+        self.my_recipe_calorie = "" if detail["calorie"] is None else str(detail["calorie"])
+        self.my_recipe_ingredients = detail["ingredients_text"]
+        self.my_recipe_steps = detail["steps_text"]
+        self.my_recipe_editing_id = recipe_id
+        self.my_recipe_form_error = ""
+
+    @rx.event
+    def cancel_edit_my_recipe(self):
+        self._reset_my_recipe_form()
+
+    @rx.event
+    def submit_my_recipe(self):
+        if not self.my_recipe_menu_name.strip() or not self.my_recipe_ingredients.strip() \
+                or not self.my_recipe_steps.strip():
+            self.my_recipe_form_error = "메뉴명, 재료, 조리법은 필수입니다."
+            return
+        calorie_value = None
+        if self.my_recipe_calorie.strip():
+            try:
+                calorie_value = float(self.my_recipe_calorie)
+            except ValueError:
+                self.my_recipe_form_error = "칼로리는 숫자로 입력해주세요."
+                return
+        self.my_recipe_submitting = True
+        self.my_recipe_form_error = ""
+        payload = {
+            "menu_name": self.my_recipe_menu_name,
+            "category": self.my_recipe_category or "기타",
+            "calorie": calorie_value,
+            "ingredients_text": self.my_recipe_ingredients,
+            "steps_text": self.my_recipe_steps,
+        }
+        try:
+            if self.my_recipe_editing_id is not None:
+                response = requests.put(
+                    f"{API_BASE}/my-recipes/{self.my_recipe_editing_id}",
+                    params={"user_id": self.submitted_user_id}, json=payload, timeout=10,
+                )
+            else:
+                response = requests.post(
+                    f"{API_BASE}/my-recipes",
+                    params={"user_id": self.submitted_user_id}, json=payload, timeout=10,
+                )
+        except requests.RequestException as e:
+            self.my_recipe_form_error = f"서버에 연결할 수 없습니다: {e}"
+            self.my_recipe_submitting = False
+            return
+        if response.status_code == 200:
+            self._reset_my_recipe_form()
+            self._fetch_my_recipes()
+        else:
+            self.my_recipe_form_error = f"저장 실패 ({response.status_code})"
+        self.my_recipe_submitting = False
+
+    @rx.event
+    def delete_my_recipe(self, recipe_id: int):
+        try:
+            response = requests.delete(
+                f"{API_BASE}/my-recipes/{recipe_id}",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.my_recipes_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self._fetch_my_recipes()
+        else:
+            self.my_recipes_error = f"삭제 실패 ({response.status_code})"
 
 
 def labeled_input(label: str, field: str, placeholder: str = "") -> rx.Component:
@@ -840,6 +976,106 @@ def favorites_list_view() -> rx.Component:
     )
 
 
+def my_recipe_status_badge(status: str) -> rx.Component:
+    return rx.cond(
+        status == "approved",
+        rx.badge("승인됨", color_scheme="green"),
+        rx.badge("검토 대기중", color_scheme="orange"),
+    )
+
+
+def my_recipe_list_item(item: dict) -> rx.Component:
+    return rx.card(
+        rx.hstack(
+            rx.vstack(
+                rx.text(item["menu_name"], weight="medium"),
+                rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
+                my_recipe_status_badge(item["status"]),
+                align="start",
+                spacing="1",
+            ),
+            rx.spacer(),
+            rx.button("수정", size="1", variant="soft", on_click=lambda: State.start_edit_my_recipe(item["id"])),
+            rx.button(
+                "삭제", size="1", color_scheme="red", variant="soft",
+                on_click=lambda: State.delete_my_recipe(item["id"]),
+            ),
+            width="100%",
+            align="center",
+        ),
+        width="100%",
+    )
+
+
+def my_recipe_form() -> rx.Component:
+    return rx.vstack(
+        rx.heading(
+            rx.cond(State.my_recipe_editing_id != None, "레시피 수정", "새 레시피 등록"),  # noqa: E711
+            size="4",
+        ),
+        labeled_input("메뉴명", "my_recipe_menu_name", "예: 김치찌개"),
+        labeled_input("카테고리", "my_recipe_category", "예: 찌개"),
+        labeled_input("칼로리 (kcal)", "my_recipe_calorie", "예: 350"),
+        rx.vstack(
+            rx.text("재료", size="2", weight="bold"),
+            rx.text_area(
+                placeholder="예: 김치 200g, 돼지고기 100g, 두부 1/2모",
+                value=State.my_recipe_ingredients,
+                on_change=lambda v: State.set_field("my_recipe_ingredients", v),
+                width="100%",
+            ),
+            width="100%", spacing="1",
+        ),
+        rx.vstack(
+            rx.text("조리법", size="2", weight="bold"),
+            rx.text_area(
+                placeholder="예: 1. 김치를 볶는다\n2. 물을 넣고 끓인다",
+                value=State.my_recipe_steps,
+                on_change=lambda v: State.set_field("my_recipe_steps", v),
+                width="100%",
+            ),
+            width="100%", spacing="1",
+        ),
+        rx.cond(
+            State.my_recipe_form_error != "",
+            rx.callout(State.my_recipe_form_error, color_scheme="red", width="100%"),
+        ),
+        rx.hstack(
+            rx.button(
+                rx.cond(State.my_recipe_editing_id != None, "수정 완료", "등록하기"),  # noqa: E711
+                on_click=State.submit_my_recipe, loading=State.my_recipe_submitting,
+            ),
+            rx.cond(
+                State.my_recipe_editing_id != None,  # noqa: E711
+                rx.button("취소", variant="soft", on_click=State.cancel_edit_my_recipe),
+            ),
+            spacing="2",
+        ),
+        width="100%", spacing="3",
+    )
+
+
+def my_recipes_view() -> rx.Component:
+    return rx.vstack(
+        rx.button("← 돌아가기", size="2", variant="soft", on_click=State.close_my_recipes),
+        rx.heading("내가 등록한 레시피", size="6"),
+        my_recipe_form(),
+        rx.divider(),
+        rx.cond(
+            State.my_recipes_error != "",
+            rx.callout(State.my_recipes_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.my_recipes_list.length() > 0,
+            rx.vstack(rx.foreach(State.my_recipes_list, my_recipe_list_item), width="100%", spacing="2"),
+            rx.text("아직 등록한 레시피가 없습니다.", color="gray"),
+        ),
+        spacing="4",
+        width="100%",
+        max_width="480px",
+    )
+
+
 def popular_video_card(v: dict) -> rx.Component:
     return rx.card(
         rx.link(
@@ -1017,7 +1253,11 @@ def main_area() -> rx.Component:
         rx.cond(
             State.showing_favorites,
             favorites_list_view(),
-            rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
+            rx.cond(
+                State.showing_my_recipes,
+                my_recipes_view(),
+                rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
+            ),
         ),
         onboarding_form(),
     )
@@ -1038,6 +1278,10 @@ def bottom_nav() -> rx.Component:
             rx.button(
                 rx.vstack(rx.icon("heart", size=18), rx.text("즐겨찾기", size="1"), spacing="0"),
                 variant="ghost", on_click=State.load_favorites, flex="1",
+            ),
+            rx.button(
+                rx.vstack(rx.icon("book-open", size=18), rx.text("내레시피", size="1"), spacing="0"),
+                variant="ghost", on_click=State.load_my_recipes, flex="1",
             ),
             width="100%",
             max_width="480px",
