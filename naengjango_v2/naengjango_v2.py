@@ -58,6 +58,10 @@ class State(rx.State):
     recipe_favorited: bool = False
     favorite_error: str = ""
 
+    substitution_coverage: dict = {}
+    substitution_missing: list[dict] = []
+    substitution_error: str = ""
+
     review_rating: str = "5"
     review_text_input: str = ""
     reviews_list: list[dict] = []
@@ -235,8 +239,27 @@ class State(rx.State):
             self.review_error = ""
             self._fetch_reviews(recipe_id)
             self._check_favorited(recipe_id)
+            self._fetch_substitution(recipe_id)
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
+
+    def _fetch_substitution(self, recipe_id: int):
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/recipes/{recipe_id}/substitution",
+                params={"user_id": self.submitted_user_id},
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            self.substitution_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.substitution_coverage = data["coverage"]
+            self.substitution_missing = data["missing_ingredients"]
+            self.substitution_error = ""
+        else:
+            self.substitution_error = f"조회 실패 ({response.status_code})"
 
     @rx.event
     def back_to_recommendations(self):
@@ -244,6 +267,8 @@ class State(rx.State):
         self.recipe_steps = []
         self.reviews_list = []
         self.review_summary = ""
+        self.substitution_coverage = {}
+        self.substitution_missing = []
 
     def _check_favorited(self, recipe_id: int):
         try:
@@ -594,6 +619,59 @@ def review_section() -> rx.Component:
     )
 
 
+def missing_ingredient_row(m: dict) -> rx.Component:
+    color = rx.cond(
+        m["type"] == "omit",
+        "gray",
+        rx.cond(m["type"] == "substitute", "grass", "amber"),
+    )
+    return rx.hstack(
+        rx.badge(m["ingredient"], color_scheme=color),
+        rx.text(m["suggestion"], size="2", color="gray"),
+        width="100%",
+        align="center",
+    )
+
+
+def substitution_section() -> rx.Component:
+    return rx.cond(
+        State.substitution_coverage,
+        rx.vstack(
+            rx.divider(),
+            rx.hstack(
+                rx.heading("재료 정보", size="4"),
+                rx.spacer(),
+                rx.cond(
+                    State.substitution_coverage["coverage_pct"] != None,  # noqa: E711
+                    rx.badge(
+                        f"보유 재료 사용률 {State.substitution_coverage['coverage_pct']}%",
+                        color_scheme="grass",
+                        size="2",
+                    ),
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.cond(
+                State.substitution_error != "",
+                rx.callout(State.substitution_error, color_scheme="red", width="100%"),
+            ),
+            rx.cond(
+                State.substitution_missing.length() > 0,
+                rx.vstack(
+                    rx.text("부족한 재료 / 대체·생략 안내", size="2", weight="bold", color="gray"),
+                    rx.foreach(State.substitution_missing, missing_ingredient_row),
+                    width="100%",
+                    spacing="2",
+                ),
+                rx.text("필요한 재료를 전부 보유하고 있습니다!", color="grass", size="2"),
+            ),
+            width="100%",
+            spacing="2",
+        ),
+    )
+
+
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
         rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
@@ -625,6 +703,7 @@ def recipe_detail_view() -> rx.Component:
             State.recipe_detail_error != "",
             rx.callout(State.recipe_detail_error, color_scheme="red", width="100%"),
         ),
+        substitution_section(),
         rx.heading("조리 단계", size="4"),
         rx.vstack(
             rx.foreach(State.recipe_steps, recipe_step_row),
