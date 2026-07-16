@@ -5,11 +5,14 @@ FastAPI 백엔드(api/routers/profile.py, api/routers/pantry.py)를 그대로 �
 """
 
 import json
+import os
 
 import reflex as rx
 import requests
+from dotenv import load_dotenv
 
-API_BASE = "http://127.0.0.1:8001"
+load_dotenv()
+API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8001")
 
 GENDER_OPTIONS = ["여성", "남성"]
 COOKING_LEVEL_OPTIONS = ["초급", "중급", "고급"]
