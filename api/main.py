@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from api.routers import (
     auth,
     favorite,
+    ingredient_catalog,
     pantry,
     popular_videos,
     profile,
@@ -23,6 +24,7 @@ app.include_router(favorite.router)
 app.include_router(review.router)
 app.include_router(substitution.router)
 app.include_router(popular_videos.router)
+app.include_router(ingredient_catalog.router)
 
 
 @app.get("/health")

@@ -80,6 +80,12 @@ class State(rx.State):
     selected_popular_category: str = ""
     popular_error: str = ""
 
+    catalog_keyword: str = ""
+    catalog_results: list[dict] = []
+    catalog_total: int = 0
+    catalog_error: str = ""
+    catalog_searching: bool = False
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -199,6 +205,43 @@ class State(rx.State):
         if response.status_code == 200:
             self.new_ingredient_name = ""
             self.new_ingredient_expiry = ""
+            self._fetch_pantry()
+        else:
+            self.pantry_error = f"추가 실패 ({response.status_code})"
+
+    @rx.event
+    def search_catalog(self):
+        self.catalog_searching = True
+        self.catalog_error = ""
+        try:
+            response = requests.get(
+                f"{API_BASE}/ingredients/search",
+                params={"keyword": self.catalog_keyword, "limit": 10},
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            self.catalog_error = f"서버에 연결할 수 없습니다: {e}"
+            self.catalog_searching = False
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.catalog_results = data["items"]
+            self.catalog_total = data["total"]
+        else:
+            self.catalog_error = f"검색 실패 ({response.status_code})"
+        self.catalog_searching = False
+
+    @rx.event
+    def add_ingredient_from_catalog(self, name: str):
+        payload = {"name": name, "expiry_date": None}
+        try:
+            response = requests.post(
+                f"{API_BASE}/pantry/{self.submitted_user_id}", json=payload, timeout=10
+            )
+        except requests.RequestException as e:
+            self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
             self._fetch_pantry()
         else:
             self.pantry_error = f"추가 실패 ({response.status_code})"
@@ -853,6 +896,63 @@ def popular_videos_section() -> rx.Component:
     )
 
 
+def catalog_result_row(item: dict) -> rx.Component:
+    return rx.card(
+        rx.hstack(
+            rx.vstack(
+                rx.text(item["name"], weight="medium"),
+                rx.text(
+                    f"{item['db_group']} · {item['energy_kcal']}kcal",
+                    size="1", color="gray",
+                ),
+                align="start",
+                spacing="0",
+            ),
+            rx.spacer(),
+            rx.button(
+                "냉장고에 추가",
+                size="1",
+                on_click=lambda: State.add_ingredient_from_catalog(item["name"]),
+            ),
+            width="100%",
+            align="center",
+        ),
+        width="100%",
+    )
+
+
+def catalog_search_section() -> rx.Component:
+    return rx.vstack(
+        rx.divider(),
+        rx.heading("재료 찾아보기", size="6"),
+        rx.hstack(
+            rx.input(
+                placeholder="재료 이름으로 검색 (예: 두부)",
+                value=State.catalog_keyword,
+                on_change=lambda v: State.set_field("catalog_keyword", v),
+                width="100%",
+            ),
+            rx.button("검색", on_click=State.search_catalog, loading=State.catalog_searching),
+            width="100%",
+        ),
+        rx.cond(
+            State.catalog_error != "",
+            rx.callout(State.catalog_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.catalog_results.length() > 0,
+            rx.vstack(
+                rx.text(f"검색 결과 {State.catalog_total}건 중 일부", size="2", color="gray"),
+                rx.foreach(State.catalog_results, catalog_result_row),
+                width="100%",
+                spacing="2",
+            ),
+        ),
+        width="100%",
+        spacing="3",
+    )
+
+
 def pantry_section() -> rx.Component:
     return rx.vstack(
         rx.hstack(
@@ -897,6 +997,7 @@ def pantry_section() -> rx.Component:
             ),
             rx.text("아직 등록된 재료가 없습니다.", color="gray"),
         ),
+        catalog_search_section(),
         rx.cond(
             State.safety_error != "",
             rx.callout(State.safety_error, color_scheme="red", width="100%"),
