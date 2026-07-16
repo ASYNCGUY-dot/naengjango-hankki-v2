@@ -696,6 +696,11 @@ def recipe_detail_view() -> rx.Component:
             color="gray",
         ),
         rx.cond(
+            State.selected_recipe["youtube_url"],
+            rx.link("▶ 유튜브에서 조리 영상 보기", href=State.selected_recipe["youtube_url"],
+                     is_external=True, color=rx.color("grass", 11), weight="bold"),
+        ),
+        rx.cond(
             State.favorite_error != "",
             rx.callout(State.favorite_error, color_scheme="red", width="100%"),
         ),
