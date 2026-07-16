@@ -36,6 +36,12 @@ class State(rx.State):
     new_ingredient_expiry: str = ""
     pantry_error: str = ""
 
+    safety_checked_name: str = ""
+    safety_recall_matches: list[dict] = []
+    safety_expiry_status: str = ""
+    safety_checking: bool = False
+    safety_error: str = ""
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -130,6 +136,26 @@ class State(rx.State):
         else:
             self.pantry_error = f"삭제 실패 ({response.status_code})"
 
+    @rx.event
+    def check_safety(self, name: str, expiry_date: str | None):
+        self.safety_checking = True
+        self.safety_error = ""
+        payload = {"ingredient_name": name, "expiry_date": expiry_date}
+        try:
+            response = requests.post(f"{API_BASE}/safety/check", json=payload, timeout=15)
+        except requests.RequestException as e:
+            self.safety_error = f"서버에 연결할 수 없습니다: {e}"
+            self.safety_checking = False
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.safety_checked_name = name
+            self.safety_recall_matches = data["recall_matches"]
+            self.safety_expiry_status = data["expiry_status"] or ""
+        else:
+            self.safety_error = f"확인 실패 ({response.status_code})"
+        self.safety_checking = False
+
 
 def labeled_input(label: str, field: str, placeholder: str = "") -> rx.Component:
     return rx.vstack(
@@ -198,6 +224,13 @@ def pantry_item_row(item: dict) -> rx.Component:
         ),
         rx.spacer(),
         rx.button(
+            "안전확인",
+            size="1",
+            variant="soft",
+            loading=State.safety_checking,
+            on_click=lambda: State.check_safety(item["name"], item["expiry_date"]),
+        ),
+        rx.button(
             "삭제",
             size="1",
             color_scheme="red",
@@ -206,6 +239,35 @@ def pantry_item_row(item: dict) -> rx.Component:
         ),
         width="100%",
         align="center",
+    )
+
+
+def safety_result_panel() -> rx.Component:
+    return rx.cond(
+        State.safety_checked_name != "",
+        rx.vstack(
+            rx.divider(),
+            rx.heading(f"안전정보: {State.safety_checked_name}", size="4"),
+            rx.cond(
+                State.safety_expiry_status != "",
+                rx.callout(f"유통기한 - {State.safety_expiry_status}", color_scheme="orange"),
+                rx.callout("유통기한 여유 있음", color_scheme="green"),
+            ),
+            rx.cond(
+                State.safety_recall_matches.length() > 0,
+                rx.vstack(
+                    rx.text("회수·판매중지 이력이 있습니다:", color="red", weight="bold"),
+                    rx.foreach(
+                        State.safety_recall_matches,
+                        lambda m: rx.text(f"- {m['PRDTNM']}: {m['RTRVLPRVNS']}", size="2"),
+                    ),
+                    width="100%",
+                ),
+                rx.callout("회수·판매중지 이력 없음", color_scheme="green"),
+            ),
+            width="100%",
+            spacing="2",
+        ),
     )
 
 
@@ -242,6 +304,11 @@ def pantry_section() -> rx.Component:
             ),
             rx.text("아직 등록된 재료가 없습니다.", color="gray"),
         ),
+        rx.cond(
+            State.safety_error != "",
+            rx.callout(State.safety_error, color_scheme="red", width="100%"),
+        ),
+        safety_result_panel(),
         spacing="4",
         width="100%",
         max_width="480px",
