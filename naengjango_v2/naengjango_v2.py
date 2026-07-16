@@ -76,6 +76,16 @@ class State(rx.State):
         setattr(self, field, value)
 
     @rx.event
+    def register_service_worker(self):
+        """PWA 설치 요건 충족용 - 페이지 로드 시 서비스워커를 등록한다.
+        rx.el.script(src=...)로 동적 삽입한 태그는 브라우저가 실행하지 않아서
+        (React가 DOM에 직접 삽입한 script 태그는 파서가 아니라 실행 안 되는 흔한 문제),
+        rx.call_script로 직접 실행하는 방식으로 바꿨다."""
+        return rx.call_script(
+            "if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js'); }"
+        )
+
+    @rx.event
     def submit_profile(self):
         self.is_submitting = True
         self.error_message = ""
@@ -790,5 +800,12 @@ def index() -> rx.Component:
     )
 
 
-app = rx.App()
-app.add_page(index)
+app = rx.App(
+    html_lang="ko",
+    head_components=[
+        rx.el.link(rel="manifest", href="/manifest.json"),
+        rx.el.meta(name="theme-color", content="#3f7d55"),
+        rx.el.link(rel="apple-touch-icon", href="/icon.svg"),
+    ],
+)
+app.add_page(index, on_load=State.register_service_worker)
