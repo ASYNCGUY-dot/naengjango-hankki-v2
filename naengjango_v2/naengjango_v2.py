@@ -14,6 +14,13 @@ from dotenv import load_dotenv
 load_dotenv()
 API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8001")
 
+CATEGORY_INGREDIENTS = {
+    "채소/과일": ["대파", "양파", "버섯", "시금치", "방울토마토"],
+    "육류/생선": ["닭가슴살", "돼지고기", "소고기", "연어"],
+    "유제품/계란": ["계란", "우유", "모짜렐라치즈"],
+    "기타": ["두부", "김치", "밥", "식용유", "간장"],
+}
+
 GENDER_OPTIONS = ["여성", "남성"]
 COOKING_LEVEL_OPTIONS = ["초급", "중급", "고급"]
 NOVELTY_OPTIONS = ["새로운 메뉴 선호", "익숙한 메뉴 선호"]
@@ -45,6 +52,8 @@ class State(rx.State):
     new_ingredient_name: str = ""
     new_ingredient_expiry: str = ""
     pantry_error: str = ""
+    category_selected_ingredients: list[str] = []
+    pantry_input_mode: str = "category"
 
     safety_checked_name: str = ""
     safety_recall_matches: list[dict] = []
@@ -318,6 +327,32 @@ class State(rx.State):
             self._fetch_seasonal()
         else:
             self.pantry_error = f"추가 실패 ({response.status_code})"
+
+    @rx.event
+    def set_pantry_input_mode(self, mode: str):
+        self.pantry_input_mode = mode
+
+    @rx.event
+    def toggle_category_ingredient(self, name: str):
+        if name in self.category_selected_ingredients:
+            self.category_selected_ingredients = [i for i in self.category_selected_ingredients if i != name]
+        else:
+            self.category_selected_ingredients = self.category_selected_ingredients + [name]
+
+    @rx.event
+    def confirm_category_ingredients(self):
+        for name in self.category_selected_ingredients:
+            try:
+                requests.post(
+                    f"{API_BASE}/pantry/{self.submitted_user_id}",
+                    json={"name": name, "expiry_date": None}, timeout=10,
+                )
+            except requests.RequestException as e:
+                self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
+                return
+        self.category_selected_ingredients = []
+        self._fetch_pantry()
+        self._fetch_seasonal()
 
     @rx.event
     def search_catalog(self):
@@ -1988,6 +2023,90 @@ def seasonal_section() -> rx.Component:
     )
 
 
+def category_ingredient_tile(name: str) -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.icon("leafy-green", size=22),
+            rx.text(name, size="2", weight="medium"),
+            rx.cond(
+                State.category_selected_ingredients.contains(name),
+                rx.icon("circle-check", size=16, color=rx.color("grass", 9)),
+            ),
+            align="center", spacing="1",
+        ),
+        on_click=lambda: State.toggle_category_ingredient(name),
+        cursor="pointer",
+        variant=rx.cond(State.category_selected_ingredients.contains(name), "surface", "classic"),
+        width="90px",
+    )
+
+
+def category_ingredient_group(category: str, names: list[str]) -> rx.Component:
+    return rx.vstack(
+        rx.text(category, size="2", weight="bold", color="gray"),
+        rx.hstack(
+            rx.foreach(names, category_ingredient_tile),
+            wrap="wrap", spacing="2",
+        ),
+        width="100%", spacing="2", align="start",
+    )
+
+
+def category_ingredient_grid() -> rx.Component:
+    return rx.vstack(
+        category_ingredient_group("채소/과일", CATEGORY_INGREDIENTS["채소/과일"]),
+        category_ingredient_group("육류/생선", CATEGORY_INGREDIENTS["육류/생선"]),
+        category_ingredient_group("유제품/계란", CATEGORY_INGREDIENTS["유제품/계란"]),
+        category_ingredient_group("기타", CATEGORY_INGREDIENTS["기타"]),
+        rx.button(
+            f"재료 확인하기 ({State.category_selected_ingredients.length()}개)",
+            on_click=State.confirm_category_ingredients,
+            width="100%", size="3",
+            disabled=State.category_selected_ingredients.length() == 0,
+        ),
+        width="100%", spacing="3",
+    )
+
+
+def pantry_input_section() -> rx.Component:
+    return rx.vstack(
+        rx.hstack(
+            rx.button(
+                "카테고리 선택", size="2",
+                variant=rx.cond(State.pantry_input_mode == "category", "solid", "soft"),
+                on_click=lambda: State.set_pantry_input_mode("category"),
+            ),
+            rx.button(
+                "직접 입력", size="2",
+                variant=rx.cond(State.pantry_input_mode == "direct", "solid", "soft"),
+                on_click=lambda: State.set_pantry_input_mode("direct"),
+            ),
+            width="100%",
+        ),
+        rx.cond(
+            State.pantry_input_mode == "category",
+            category_ingredient_grid(),
+            rx.hstack(
+                rx.input(
+                    placeholder="재료 이름 (예: 두부)",
+                    value=State.new_ingredient_name,
+                    on_change=lambda v: State.set_field("new_ingredient_name", v),
+                    width="100%",
+                ),
+                rx.input(
+                    placeholder="유통기한 YYYY-MM-DD (선택)",
+                    value=State.new_ingredient_expiry,
+                    on_change=lambda v: State.set_field("new_ingredient_expiry", v),
+                    width="100%",
+                ),
+                rx.button("추가", on_click=State.add_ingredient),
+                width="100%",
+            ),
+        ),
+        width="100%", spacing="3",
+    )
+
+
 def pantry_section() -> rx.Component:
     return rx.vstack(
         rx.hstack(
@@ -2003,22 +2122,7 @@ def pantry_section() -> rx.Component:
             width="100%",
         ),
         rx.text(f"user_id = {State.submitted_user_id}", color="gray", size="2"),
-        rx.hstack(
-            rx.input(
-                placeholder="재료 이름 (예: 두부)",
-                value=State.new_ingredient_name,
-                on_change=lambda v: State.set_field("new_ingredient_name", v),
-                width="100%",
-            ),
-            rx.input(
-                placeholder="유통기한 YYYY-MM-DD (선택)",
-                value=State.new_ingredient_expiry,
-                on_change=lambda v: State.set_field("new_ingredient_expiry", v),
-                width="100%",
-            ),
-            rx.button("추가", on_click=State.add_ingredient),
-            width="100%",
-        ),
+        pantry_input_section(),
         rx.cond(
             State.pantry_error != "",
             rx.callout(State.pantry_error, color_scheme="red", width="100%"),
