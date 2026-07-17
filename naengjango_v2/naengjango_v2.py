@@ -99,6 +99,15 @@ class State(rx.State):
     my_recipe_form_error: str = ""
     my_recipe_submitting: bool = False
 
+    price_tier: str = ""
+    price_matched: list[dict] = []
+    price_unmatched: list[str] = []
+    price_total_cost: float = 0.0
+    price_included: list[dict] = []
+    price_loading: bool = False
+    price_error: str = ""
+    price_fetched: bool = False
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -334,8 +343,38 @@ class State(rx.State):
             self._fetch_reviews(recipe_id)
             self._check_favorited(recipe_id)
             self._fetch_substitution(recipe_id)
+            self.price_fetched = False
+            self.price_error = ""
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def fetch_price(self):
+        recipe_id = self.selected_recipe["id"]
+        self.price_loading = True
+        self.price_error = ""
+        try:
+            # KAMIS 4개 부류(채소/곡물/축산/수산) API를 순차 호출해서 다소 느리다.
+            response = requests.get(
+                f"{API_BASE}/recommendation/recipes/{recipe_id}/price",
+                params={"user_id": self.submitted_user_id},
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            self.price_error = f"서버에 연결할 수 없습니다: {e}"
+            self.price_loading = False
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.price_tier = data["tier"]
+            self.price_matched = data["matched"]
+            self.price_unmatched = data["unmatched"]
+            self.price_total_cost = round(data["total_cost"])
+            self.price_included = data["included"]
+            self.price_fetched = True
+        else:
+            self.price_error = f"조회 실패 ({response.status_code})"
+        self.price_loading = False
 
     def _fetch_substitution(self, recipe_id: int):
         try:
@@ -889,6 +928,43 @@ def substitution_section() -> rx.Component:
     )
 
 
+def price_section() -> rx.Component:
+    return rx.vstack(
+        rx.divider(),
+        rx.cond(
+            State.price_fetched,
+            rx.vstack(
+                rx.hstack(
+                    rx.heading("예상 재료비", size="4"),
+                    rx.spacer(),
+                    rx.badge(
+                        State.price_tier,
+                        color_scheme=rx.cond(
+                            State.price_tier == "프리미엄", "red",
+                            rx.cond(State.price_tier == "가성비", "green", "gray"),
+                        ),
+                    ),
+                    width="100%", align="center",
+                ),
+                rx.text(
+                    f"포함된 재료 기준 약 {State.price_total_cost}원 · 참고용, 최신 가격은 KAMIS 등에서 재확인 권장",
+                    size="2", color="gray",
+                ),
+                width="100%", spacing="2",
+            ),
+            rx.button(
+                "예상 재료비 확인", size="2", variant="soft",
+                on_click=State.fetch_price, loading=State.price_loading,
+            ),
+        ),
+        rx.cond(
+            State.price_error != "",
+            rx.callout(State.price_error, color_scheme="red", width="100%"),
+        ),
+        width="100%", spacing="2",
+    )
+
+
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
         rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
@@ -926,6 +1002,7 @@ def recipe_detail_view() -> rx.Component:
             rx.callout(State.recipe_detail_error, color_scheme="red", width="100%"),
         ),
         substitution_section(),
+        price_section(),
         rx.heading("조리 단계", size="4"),
         rx.vstack(
             rx.foreach(State.recipe_steps, recipe_step_row),
