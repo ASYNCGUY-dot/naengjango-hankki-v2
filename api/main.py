@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from api.routers import (
+    admin,
     auth,
     favorite,
     ingredient_catalog,
@@ -22,6 +23,7 @@ from api.routers import (
 
 app = FastAPI(title="냉장고 한끼 V2 API")
 
+app.include_router(admin.router)
 app.include_router(auth.router)
 app.include_router(profile.router)
 app.include_router(pantry.router)

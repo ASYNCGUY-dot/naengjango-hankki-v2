@@ -144,6 +144,15 @@ class State(rx.State):
     my_ingredient_submissions: list[dict] = []
     my_ingredient_submissions_error: str = ""
 
+    is_admin: bool = False
+    showing_admin: bool = False
+    admin_code_input: str = ""
+    admin_promote_error: str = ""
+    admin_pending_recipes: list[dict] = []
+    admin_pending_ingredients: list[dict] = []
+    admin_error: str = ""
+    admin_loading: bool = False
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -513,6 +522,108 @@ class State(rx.State):
         self.ingredient_submission_submitting = False
 
     @rx.event
+    def open_admin(self):
+        self.showing_admin = True
+        self.showing_favorites = False
+        self.showing_my_recipes = False
+        if self.is_admin:
+            self._fetch_admin_pending()
+
+    @rx.event
+    def close_admin(self):
+        self.showing_admin = False
+
+    def _fetch_admin_pending(self):
+        self.admin_loading = True
+        self.admin_error = ""
+        try:
+            r1 = requests.get(
+                f"{API_BASE}/admin/pending-recipes", params={"user_id": self.submitted_user_id}, timeout=10
+            )
+            r2 = requests.get(
+                f"{API_BASE}/admin/pending-ingredients", params={"user_id": self.submitted_user_id}, timeout=10
+            )
+        except requests.RequestException as e:
+            self.admin_error = f"서버에 연결할 수 없습니다: {e}"
+            self.admin_loading = False
+            return
+        if r1.status_code == 200 and r2.status_code == 200:
+            self.admin_pending_recipes = r1.json()
+            self.admin_pending_ingredients = r2.json()
+        else:
+            self.admin_error = f"조회 실패 ({r1.status_code}/{r2.status_code})"
+        self.admin_loading = False
+
+    @rx.event
+    def promote_admin(self):
+        if not self.admin_code_input.strip():
+            self.admin_promote_error = "관리자 코드를 입력해주세요."
+            return
+        try:
+            response = requests.post(
+                f"{API_BASE}/admin/promote",
+                params={"user_id": self.submitted_user_id}, json={"code": self.admin_code_input}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.admin_promote_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.is_admin = True
+            self.admin_promote_error = ""
+            self.admin_code_input = ""
+            self._fetch_admin_pending()
+        else:
+            self.admin_promote_error = "관리자 코드가 올바르지 않습니다."
+
+    @rx.event
+    def admin_approve_recipe(self, recipe_id: int):
+        try:
+            requests.post(
+                f"{API_BASE}/admin/recipes/{recipe_id}/approve",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.admin_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        self._fetch_admin_pending()
+
+    @rx.event
+    def admin_reject_recipe(self, recipe_id: int):
+        try:
+            requests.post(
+                f"{API_BASE}/admin/recipes/{recipe_id}/reject",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.admin_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        self._fetch_admin_pending()
+
+    @rx.event
+    def admin_approve_ingredient(self, submission_id: int):
+        try:
+            requests.post(
+                f"{API_BASE}/admin/ingredients/{submission_id}/approve",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.admin_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        self._fetch_admin_pending()
+
+    @rx.event
+    def admin_reject_ingredient(self, submission_id: int):
+        try:
+            requests.post(
+                f"{API_BASE}/admin/ingredients/{submission_id}/reject",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.admin_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        self._fetch_admin_pending()
+
+    @rx.event
     def fetch_price(self):
         recipe_id = self.selected_recipe["id"]
         self.price_loading = True
@@ -708,6 +819,7 @@ class State(rx.State):
             self.favorites_list = response.json()
             self.showing_favorites = True
             self.showing_my_recipes = False
+            self.showing_admin = False
         else:
             self.favorites_error = f"조회 실패 ({response.status_code})"
         self.loading_favorites = False
@@ -716,6 +828,7 @@ class State(rx.State):
     def close_favorites(self):
         self.showing_favorites = False
         self.showing_my_recipes = False
+        self.showing_admin = False
 
     def _fetch_my_recipes(self):
         try:
@@ -737,6 +850,7 @@ class State(rx.State):
         self._fetch_my_recipes()
         self.showing_favorites = False
         self.showing_my_recipes = True
+        self.showing_admin = False
         self.loading_my_recipes = False
 
     def _reset_my_recipe_form(self):
@@ -1494,6 +1608,94 @@ def my_recipes_view() -> rx.Component:
     )
 
 
+def admin_pending_recipe_row(item: dict) -> rx.Component:
+    return rx.card(
+        rx.hstack(
+            rx.vstack(
+                rx.text(item["menu_name"], weight="medium"),
+                rx.text(f"{item['category']} · {item['calorie']}kcal · by {item['username']}", size="1", color="gray"),
+                align="start", spacing="0",
+            ),
+            rx.spacer(),
+            rx.button("승인", size="1", color_scheme="grass", on_click=lambda: State.admin_approve_recipe(item["id"])),
+            rx.button("거절", size="1", color_scheme="red", variant="soft",
+                      on_click=lambda: State.admin_reject_recipe(item["id"])),
+            width="100%", align="center",
+        ),
+        width="100%",
+    )
+
+
+def admin_pending_ingredient_row(item: dict) -> rx.Component:
+    return rx.card(
+        rx.hstack(
+            rx.vstack(
+                rx.text(item["ingredient_name"], weight="medium"),
+                rx.text(f"{item['calorie']}kcal · by {item['username']}", size="1", color="gray"),
+                align="start", spacing="0",
+            ),
+            rx.spacer(),
+            rx.button("승인", size="1", color_scheme="grass",
+                      on_click=lambda: State.admin_approve_ingredient(item["id"])),
+            rx.button("거절", size="1", color_scheme="red", variant="soft",
+                      on_click=lambda: State.admin_reject_ingredient(item["id"])),
+            width="100%", align="center",
+        ),
+        width="100%",
+    )
+
+
+def admin_view() -> rx.Component:
+    return rx.vstack(
+        rx.button("← 돌아가기", size="2", variant="soft", on_click=State.close_admin),
+        rx.heading("관리자", size="6"),
+        rx.cond(
+            State.is_admin,
+            rx.vstack(
+                rx.cond(
+                    State.admin_error != "",
+                    rx.callout(State.admin_error, color_scheme="red", width="100%"),
+                ),
+                rx.heading("대기 중인 유저 레시피", size="4"),
+                rx.cond(
+                    State.admin_pending_recipes.length() > 0,
+                    rx.vstack(rx.foreach(State.admin_pending_recipes, admin_pending_recipe_row),
+                              width="100%", spacing="2"),
+                    rx.text("대기 중인 레시피가 없습니다.", size="2", color="gray"),
+                ),
+                rx.divider(),
+                rx.heading("대기 중인 재료 정보", size="4"),
+                rx.cond(
+                    State.admin_pending_ingredients.length() > 0,
+                    rx.vstack(rx.foreach(State.admin_pending_ingredients, admin_pending_ingredient_row),
+                              width="100%", spacing="2"),
+                    rx.text("대기 중인 재료 정보가 없습니다.", size="2", color="gray"),
+                ),
+                width="100%", spacing="3",
+            ),
+            rx.vstack(
+                rx.text("관리자 코드를 입력하면 이 계정이 관리자로 전환됩니다.", size="2", color="gray"),
+                rx.input(
+                    placeholder="관리자 코드",
+                    value=State.admin_code_input,
+                    on_change=lambda v: State.set_field("admin_code_input", v),
+                    type="password",
+                    width="100%",
+                ),
+                rx.cond(
+                    State.admin_promote_error != "",
+                    rx.callout(State.admin_promote_error, color_scheme="red", width="100%"),
+                ),
+                rx.button("관리자 전환", on_click=State.promote_admin),
+                width="100%", spacing="3",
+            ),
+        ),
+        spacing="4",
+        width="100%",
+        max_width="480px",
+    )
+
+
 def popular_video_card(v: dict) -> rx.Component:
     return rx.card(
         rx.link(
@@ -1776,7 +1978,11 @@ def main_area() -> rx.Component:
             rx.cond(
                 State.showing_my_recipes,
                 my_recipes_view(),
-                rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
+                rx.cond(
+                    State.showing_admin,
+                    admin_view(),
+                    rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
+                ),
             ),
         ),
         onboarding_form(),
@@ -1821,6 +2027,10 @@ def app_header() -> rx.Component:
     return rx.hstack(
         rx.image(src="/logo.svg", height="64px"),
         rx.spacer(),
+        rx.cond(
+            State.submitted_user_id != None,  # noqa: E711
+            rx.icon_button("shield", variant="ghost", size="2", on_click=State.open_admin),
+        ),
         rx.color_mode.button(),
         width="100%",
         max_width="480px",
