@@ -1138,27 +1138,41 @@ def pantry_item_row(item: dict) -> rx.Component:
 
 
 def safety_result_panel() -> rx.Component:
+    has_issue = (State.safety_expiry_status != "") | (State.safety_recall_matches.length() > 0)
     return rx.cond(
         State.safety_checked_name != "",
         rx.vstack(
             rx.divider(),
-            rx.heading(f"안전정보: {State.safety_checked_name}", size="4"),
-            rx.cond(
-                State.safety_expiry_status != "",
-                rx.callout(f"유통기한 - {State.safety_expiry_status}", color_scheme="orange"),
-                rx.callout("유통기한 여유 있음", color_scheme="green"),
-            ),
-            rx.cond(
-                State.safety_recall_matches.length() > 0,
+            rx.heading("보유 재료 안전 정보", size="4"),
+            rx.card(
                 rx.vstack(
-                    rx.text("회수·판매중지 이력이 있습니다:", color="red", weight="bold"),
-                    rx.foreach(
-                        State.safety_recall_matches,
-                        lambda m: rx.text(f"- {m['PRDTNM']}: {m['RTRVLPRVNS']}", size="2"),
+                    rx.hstack(
+                        rx.text(State.safety_checked_name, weight="bold"),
+                        rx.spacer(),
+                        rx.cond(has_issue, rx.badge("주의", color_scheme="amber"), rx.badge("정상", color_scheme="green")),
+                        width="100%", align="center",
                     ),
-                    width="100%",
+                    rx.cond(
+                        State.safety_expiry_status != "",
+                        rx.text(f"유통기한 - {State.safety_expiry_status}", size="2", color="gray"),
+                        rx.text("유통기한 여유 있음", size="2", color="gray"),
+                    ),
+                    rx.cond(
+                        State.safety_recall_matches.length() > 0,
+                        rx.vstack(
+                            rx.text("회수·판매중지 이력이 있습니다:", color="red", weight="bold", size="2"),
+                            rx.foreach(
+                                State.safety_recall_matches,
+                                lambda m: rx.text(f"- {m['PRDTNM']}: {m['RTRVLPRVNS']}", size="2"),
+                            ),
+                            width="100%",
+                        ),
+                        rx.text("회수·판매중지 이력 없음", size="2", color="gray"),
+                    ),
+                    align="start", spacing="2", width="100%",
                 ),
-                rx.callout("회수·판매중지 이력 없음", color_scheme="green"),
+                width="100%",
+                variant="surface",
             ),
             width="100%",
             spacing="2",
@@ -1308,11 +1322,14 @@ def missing_ingredient_row(m: dict) -> rx.Component:
         "gray",
         rx.cond(m["type"] == "substitute", "grass", "amber"),
     )
-    return rx.hstack(
-        rx.badge(m["ingredient"], color_scheme=color),
-        rx.text(m["suggestion"], size="2", color="gray"),
+    return rx.card(
+        rx.vstack(
+            rx.badge(m["ingredient"], color_scheme=color, size="2"),
+            rx.text(m["suggestion"], size="2", color="gray"),
+            align="start", spacing="1",
+        ),
         width="100%",
-        align="center",
+        variant="surface",
     )
 
 
