@@ -83,6 +83,8 @@ class State(rx.State):
     review_rating: str = "5"
     review_text_input: str = ""
     reviews_list: list[dict] = []
+    review_avg_rating: float = 0.0
+    review_count: int = 0
     review_summary: str = ""
     review_error: str = ""
     submitting_review: bool = False
@@ -839,6 +841,13 @@ class State(rx.State):
             return
         if response.status_code == 200:
             self.reviews_list = response.json()
+            self.review_count = len(self.reviews_list)
+            if self.review_count > 0:
+                self.review_avg_rating = round(
+                    sum(r["rating"] for r in self.reviews_list) / self.review_count, 1
+                )
+            else:
+                self.review_avg_rating = 0.0
         else:
             self.review_error = f"조회 실패 ({response.status_code})"
 
@@ -1345,7 +1354,14 @@ def review_row(r: dict) -> rx.Component:
 def review_section() -> rx.Component:
     return rx.vstack(
         rx.divider(),
-        rx.heading("유저 후기", size="4"),
+        rx.hstack(
+            rx.heading("유저 후기", size="4"),
+            rx.cond(
+                State.review_count > 0,
+                rx.badge(f"★ {State.review_avg_rating} ({State.review_count})", color_scheme="amber", size="2"),
+            ),
+            align="center", spacing="2",
+        ),
         rx.cond(
             State.review_error != "",
             rx.callout(State.review_error, color_scheme="red", width="100%"),
