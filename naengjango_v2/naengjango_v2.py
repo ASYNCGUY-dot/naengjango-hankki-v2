@@ -127,6 +127,10 @@ class State(rx.State):
     shopping_error: str = ""
     shopping_fetched: bool = False
 
+    recipe_liked: bool = False
+    recipe_like_count: int = 0
+    like_error: str = ""
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -386,8 +390,45 @@ class State(rx.State):
             self.nutrition_error = ""
             self.shopping_fetched = False
             self.shopping_error = ""
+            self._fetch_like_status(recipe_id)
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
+
+    def _fetch_like_status(self, recipe_id: int):
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/recipes/{recipe_id}/like",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.like_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.recipe_liked = data["liked"]
+            self.recipe_like_count = data["like_count"]
+            self.like_error = ""
+        else:
+            self.like_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def toggle_recipe_like(self):
+        recipe_id = self.selected_recipe["id"]
+        try:
+            response = requests.post(
+                f"{API_BASE}/recommendation/recipes/{recipe_id}/like/toggle",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.like_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.recipe_liked = data["liked"]
+            self.recipe_like_count = data["like_count"]
+            self.like_error = ""
+        else:
+            self.like_error = f"실패 ({response.status_code})"
 
     @rx.event
     def fetch_price(self):
@@ -1183,12 +1224,22 @@ def recipe_detail_view() -> rx.Component:
             rx.heading(State.selected_recipe["menu_name"], size="6"),
             rx.spacer(),
             rx.button(
+                f"👍 추천 {State.recipe_like_count}",
+                size="2",
+                variant=rx.cond(State.recipe_liked, "solid", "soft"),
+                on_click=State.toggle_recipe_like,
+            ),
+            rx.button(
                 rx.cond(State.recipe_favorited, "★ 즐겨찾기됨", "☆ 즐겨찾기"),
                 size="2",
                 variant="soft",
                 on_click=State.toggle_favorite,
             ),
             width="100%",
+        ),
+        rx.cond(
+            State.like_error != "",
+            rx.callout(State.like_error, color_scheme="red", width="100%"),
         ),
         rx.text(
             f"{State.selected_recipe['category']} · {State.selected_recipe['calorie']}kcal",
