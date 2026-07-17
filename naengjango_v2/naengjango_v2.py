@@ -1735,7 +1735,14 @@ def favorite_list_item(item: dict) -> rx.Component:
     return rx.card(
         rx.hstack(
             rx.text(item["menu_name"], weight="medium"),
-            rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
+            rx.text(
+                rx.cond(
+                    item["calorie"] != None,  # noqa: E711
+                    f"{item['category']} · {item['calorie']}kcal",
+                    item["category"],
+                ),
+                size="2", color="gray",
+            ),
             rx.spacer(),
             rx.button(
                 "상세보기",
@@ -1780,7 +1787,14 @@ def my_recipe_list_item(item: dict) -> rx.Component:
         rx.hstack(
             rx.vstack(
                 rx.text(item["menu_name"], weight="medium"),
-                rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
+                rx.text(
+                    rx.cond(
+                        item["calorie"] != None,  # noqa: E711
+                        f"{item['category']} · {item['calorie']}kcal",
+                        item["category"],
+                    ),
+                    size="2", color="gray",
+                ),
                 my_recipe_status_badge(item["status"]),
                 align="start",
                 spacing="1",
@@ -1871,7 +1885,14 @@ def admin_pending_recipe_row(item: dict) -> rx.Component:
         rx.hstack(
             rx.vstack(
                 rx.text(item["menu_name"], weight="medium"),
-                rx.text(f"{item['category']} · {item['calorie']}kcal · by {item['username']}", size="1", color="gray"),
+                rx.text(
+                    rx.cond(
+                        item["calorie"] != None,  # noqa: E711
+                        f"{item['category']} · {item['calorie']}kcal · by {item['username']}",
+                        f"{item['category']} · by {item['username']}",
+                    ),
+                    size="1", color="gray",
+                ),
                 align="start", spacing="0",
             ),
             rx.spacer(),
@@ -1889,7 +1910,14 @@ def admin_pending_ingredient_row(item: dict) -> rx.Component:
         rx.hstack(
             rx.vstack(
                 rx.text(item["ingredient_name"], weight="medium"),
-                rx.text(f"{item['calorie']}kcal · by {item['username']}", size="1", color="gray"),
+                rx.text(
+                    rx.cond(
+                        item["calorie"] != None,  # noqa: E711
+                        f"{item['calorie']}kcal · by {item['username']}",
+                        f"by {item['username']}",
+                    ),
+                    size="1", color="gray",
+                ),
                 align="start", spacing="0",
             ),
             rx.spacer(),
@@ -2081,7 +2109,10 @@ def ingredient_submission_status_badge(status: str) -> rx.Component:
 def my_ingredient_submission_row(item: dict) -> rx.Component:
     return rx.hstack(
         rx.text(item["ingredient_name"], size="2"),
-        rx.text(f"{item['calorie']}kcal", size="1", color="gray"),
+        rx.cond(
+            item["calorie"] != None,  # noqa: E711
+            rx.text(f"{item['calorie']}kcal", size="1", color="gray"),
+        ),
         rx.spacer(),
         ingredient_submission_status_badge(item["status"]),
         width="100%",
