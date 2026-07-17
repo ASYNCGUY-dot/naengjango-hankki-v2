@@ -576,6 +576,11 @@ class State(rx.State):
             self.safety_checked_name = name
             self.safety_recall_matches = data["recall_matches"]
             self.safety_expiry_status = data["expiry_status"] or ""
+        elif response.status_code == 503:
+            try:
+                self.safety_error = response.json().get("detail", "외부 서비스가 응답하지 않습니다. 잠시 후 다시 시도해주세요.")
+            except ValueError:
+                self.safety_error = "외부 서비스가 응답하지 않습니다. 잠시 후 다시 시도해주세요."
         else:
             self.safety_error = f"확인 실패 ({response.status_code})"
         self.safety_checking = False
