@@ -315,6 +315,10 @@ class State(rx.State):
             self._fetch_seasonal()
 
     @rx.event
+    def logout(self):
+        self.reset()
+
+    @rx.event
     def submit_profile(self):
         self.is_submitting = True
         self.error_message = ""
@@ -2500,7 +2504,13 @@ def community_view() -> rx.Component:
 
 def mypage_view() -> rx.Component:
     return rx.vstack(
-        rx.heading("마이페이지", size="6"),
+        rx.hstack(
+            rx.heading("마이페이지", size="6"),
+            rx.spacer(),
+            rx.button("로그아웃", on_click=State.logout, variant="soft", color_scheme="red", size="2"),
+            width="100%",
+            align="center",
+        ),
         rx.text(f"user_id = {State.submitted_user_id}", color="gray", size="2"),
         my_recipes_view(),
         rx.divider(),
