@@ -4,6 +4,7 @@ from api.routers import (
     auth,
     favorite,
     ingredient_catalog,
+    ingredient_submission,
     like,
     nutrition,
     pantry,
@@ -37,6 +38,7 @@ app.include_router(nutrition.router)
 app.include_router(seasonal.router)
 app.include_router(shopping.router)
 app.include_router(like.router)
+app.include_router(ingredient_submission.router)
 
 
 @app.get("/health")

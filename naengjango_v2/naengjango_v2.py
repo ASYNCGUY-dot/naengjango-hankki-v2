@@ -131,6 +131,19 @@ class State(rx.State):
     recipe_like_count: int = 0
     like_error: str = ""
 
+    show_ingredient_submission_form: bool = False
+    ingredient_submission_name: str = ""
+    ingredient_submission_calorie: str = ""
+    ingredient_submission_carbs: str = ""
+    ingredient_submission_protein: str = ""
+    ingredient_submission_fat: str = ""
+    ingredient_submission_sodium: str = ""
+    ingredient_submission_price: str = ""
+    ingredient_submission_error: str = ""
+    ingredient_submission_submitting: bool = False
+    my_ingredient_submissions: list[dict] = []
+    my_ingredient_submissions_error: str = ""
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -429,6 +442,75 @@ class State(rx.State):
             self.like_error = ""
         else:
             self.like_error = f"실패 ({response.status_code})"
+
+    @rx.event
+    def toggle_ingredient_submission_form(self):
+        self.show_ingredient_submission_form = not self.show_ingredient_submission_form
+        if self.show_ingredient_submission_form:
+            self._fetch_my_ingredient_submissions()
+
+    def _fetch_my_ingredient_submissions(self):
+        try:
+            response = requests.get(
+                f"{API_BASE}/ingredient-submissions",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.my_ingredient_submissions_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.my_ingredient_submissions = response.json()
+            self.my_ingredient_submissions_error = ""
+        else:
+            self.my_ingredient_submissions_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    def submit_ingredient_info(self):
+        if not self.ingredient_submission_name.strip():
+            self.ingredient_submission_error = "재료 이름을 입력해주세요."
+            return
+
+        def _to_float(text: str) -> float | None:
+            text = text.strip()
+            return float(text) if text else None
+
+        try:
+            payload = {
+                "ingredient_name": self.ingredient_submission_name,
+                "calorie": _to_float(self.ingredient_submission_calorie),
+                "carbs_g": _to_float(self.ingredient_submission_carbs),
+                "protein_g": _to_float(self.ingredient_submission_protein),
+                "fat_g": _to_float(self.ingredient_submission_fat),
+                "sodium_mg": _to_float(self.ingredient_submission_sodium),
+                "price_per_100g": _to_float(self.ingredient_submission_price),
+            }
+        except ValueError:
+            self.ingredient_submission_error = "숫자 항목은 숫자로 입력해주세요."
+            return
+
+        self.ingredient_submission_submitting = True
+        self.ingredient_submission_error = ""
+        try:
+            response = requests.post(
+                f"{API_BASE}/ingredient-submissions",
+                params={"user_id": self.submitted_user_id}, json=payload, timeout=10,
+            )
+        except requests.RequestException as e:
+            self.ingredient_submission_error = f"서버에 연결할 수 없습니다: {e}"
+            self.ingredient_submission_submitting = False
+            return
+        if response.status_code == 200:
+            self.ingredient_submission_name = ""
+            self.ingredient_submission_calorie = ""
+            self.ingredient_submission_carbs = ""
+            self.ingredient_submission_protein = ""
+            self.ingredient_submission_fat = ""
+            self.ingredient_submission_sodium = ""
+            self.ingredient_submission_price = ""
+            self._fetch_my_ingredient_submissions()
+        else:
+            self.ingredient_submission_error = f"등록 실패 ({response.status_code})"
+        self.ingredient_submission_submitting = False
 
     @rx.event
     def fetch_price(self):
@@ -1525,6 +1607,76 @@ def catalog_search_section() -> rx.Component:
     )
 
 
+def ingredient_submission_status_badge(status: str) -> rx.Component:
+    return rx.cond(
+        status == "approved",
+        rx.badge("승인됨", color_scheme="green", size="1"),
+        rx.cond(
+            status == "pending",
+            rx.badge("검토 대기중", color_scheme="orange", size="1"),
+            rx.badge(status, color_scheme="gray", size="1"),
+        ),
+    )
+
+
+def my_ingredient_submission_row(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(item["ingredient_name"], size="2"),
+        rx.text(f"{item['calorie']}kcal", size="1", color="gray"),
+        rx.spacer(),
+        ingredient_submission_status_badge(item["status"]),
+        width="100%",
+        align="center",
+    )
+
+
+def ingredient_submission_section() -> rx.Component:
+    return rx.vstack(
+        rx.button(
+            rx.cond(State.show_ingredient_submission_form, "재료 정보 등록 닫기", "찾는 재료가 없나요? 직접 등록"),
+            size="2", variant="soft", on_click=State.toggle_ingredient_submission_form,
+        ),
+        rx.cond(
+            State.show_ingredient_submission_form,
+            rx.vstack(
+                rx.text(
+                    "공식 DB에 이미 있는 이름이면 검토 대기 상태로 등록됩니다.",
+                    size="1", color="gray",
+                ),
+                labeled_input("재료 이름", "ingredient_submission_name", "예: 수제 두부"),
+                labeled_input("칼로리 (kcal/100g)", "ingredient_submission_calorie", "예: 80"),
+                labeled_input("탄수화물 (g/100g)", "ingredient_submission_carbs", "예: 2"),
+                labeled_input("단백질 (g/100g)", "ingredient_submission_protein", "예: 8"),
+                labeled_input("지방 (g/100g)", "ingredient_submission_fat", "예: 4"),
+                labeled_input("나트륨 (mg/100g)", "ingredient_submission_sodium", "예: 5"),
+                labeled_input("가격 (원/100g)", "ingredient_submission_price", "예: 150"),
+                rx.cond(
+                    State.ingredient_submission_error != "",
+                    rx.callout(State.ingredient_submission_error, color_scheme="red", width="100%"),
+                ),
+                rx.button(
+                    "등록하기", on_click=State.submit_ingredient_info,
+                    loading=State.ingredient_submission_submitting,
+                ),
+                rx.cond(
+                    State.my_ingredient_submissions_error != "",
+                    rx.callout(State.my_ingredient_submissions_error, color_scheme="red", width="100%"),
+                ),
+                rx.cond(
+                    State.my_ingredient_submissions.length() > 0,
+                    rx.vstack(
+                        rx.text("내가 등록한 재료", size="2", weight="bold", color="gray"),
+                        rx.foreach(State.my_ingredient_submissions, my_ingredient_submission_row),
+                        width="100%", spacing="2",
+                    ),
+                ),
+                width="100%", spacing="3",
+            ),
+        ),
+        width="100%", spacing="3",
+    )
+
+
 def seasonal_section() -> rx.Component:
     return rx.cond(
         State.seasonal_ingredients.length() > 0,
@@ -1601,6 +1753,7 @@ def pantry_section() -> rx.Component:
         ),
         seasonal_section(),
         catalog_search_section(),
+        ingredient_submission_section(),
         rx.cond(
             State.safety_error != "",
             rx.callout(State.safety_error, color_scheme="red", width="100%"),
