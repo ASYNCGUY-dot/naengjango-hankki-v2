@@ -4,6 +4,7 @@ from api.routers import (
     auth,
     favorite,
     ingredient_catalog,
+    nutrition,
     pantry,
     popular_videos,
     price,
@@ -29,6 +30,7 @@ app.include_router(popular_videos.router)
 app.include_router(ingredient_catalog.router)
 app.include_router(user_recipe.router)
 app.include_router(price.router)
+app.include_router(nutrition.router)
 
 
 @app.get("/health")

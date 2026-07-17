@@ -108,6 +108,16 @@ class State(rx.State):
     price_error: str = ""
     price_fetched: bool = False
 
+    nutrition_bracket_label: str = ""
+    nutrition_is_estimated: bool = False
+    nutrition_rows: list[dict] = []
+    nutrition_sodium_row: dict | None = None
+    nutrition_micro_is_partial: bool = False
+    nutrition_condition_notes: list[str] = []
+    nutrition_loading: bool = False
+    nutrition_error: str = ""
+    nutrition_fetched: bool = False
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -345,6 +355,8 @@ class State(rx.State):
             self._fetch_substitution(recipe_id)
             self.price_fetched = False
             self.price_error = ""
+            self.nutrition_fetched = False
+            self.nutrition_error = ""
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
 
@@ -375,6 +387,34 @@ class State(rx.State):
         else:
             self.price_error = f"조회 실패 ({response.status_code})"
         self.price_loading = False
+
+    @rx.event
+    def fetch_nutrition_fit(self):
+        recipe_id = self.selected_recipe["id"]
+        self.nutrition_loading = True
+        self.nutrition_error = ""
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/recipes/{recipe_id}/nutrition-fit",
+                params={"user_id": self.submitted_user_id},
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            self.nutrition_error = f"서버에 연결할 수 없습니다: {e}"
+            self.nutrition_loading = False
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.nutrition_bracket_label = data["bracket_label"]
+            self.nutrition_is_estimated = data["is_estimated"]
+            self.nutrition_rows = data["rows"]
+            self.nutrition_sodium_row = data["sodium_row"]
+            self.nutrition_micro_is_partial = data["micro_is_partial"]
+            self.nutrition_condition_notes = data["condition_notes"]
+            self.nutrition_fetched = True
+        else:
+            self.nutrition_error = f"조회 실패 ({response.status_code})"
+        self.nutrition_loading = False
 
     def _fetch_substitution(self, recipe_id: int):
         try:
@@ -965,6 +1005,79 @@ def price_section() -> rx.Component:
     )
 
 
+def nutrition_row_item(row: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(row["label"], size="2", weight="medium"),
+        rx.spacer(),
+        rx.text(f"{row['provided']}{row['unit']} / {row['target']}{row['unit']}", size="2", color="gray"),
+        rx.cond(
+            row["pct_of_daily"] != None,  # noqa: E711
+            rx.badge(f"{row['pct_of_daily']}%", color_scheme="grass", size="1"),
+        ),
+        rx.cond(
+            row["already_supplemented"],
+            rx.badge("영양제로 보충 중", color_scheme="blue", size="1"),
+        ),
+        width="100%",
+        align="center",
+    )
+
+
+def nutrition_section() -> rx.Component:
+    return rx.vstack(
+        rx.divider(),
+        rx.cond(
+            State.nutrition_fetched,
+            rx.vstack(
+                rx.heading("영양 목표 대비", size="4"),
+                rx.text(f"기준: {State.nutrition_bracket_label}", size="2", color="gray"),
+                rx.cond(
+                    State.nutrition_is_estimated,
+                    rx.callout(
+                        "프로필에 연령대·성별을 입력하지 않아 성인 평균치로 계산했습니다.",
+                        color_scheme="amber", width="100%",
+                    ),
+                ),
+                rx.vstack(rx.foreach(State.nutrition_rows, nutrition_row_item), width="100%", spacing="2"),
+                rx.cond(
+                    State.nutrition_sodium_row != None,  # noqa: E711
+                    rx.hstack(
+                        rx.text("나트륨", size="2", weight="medium"),
+                        rx.spacer(),
+                        rx.text(
+                            f"{State.nutrition_sodium_row['provided']}mg / 상한 {State.nutrition_sodium_row['limit']}mg",
+                            size="2", color="gray",
+                        ),
+                        rx.badge(f"{State.nutrition_sodium_row['pct_of_limit']}%", color_scheme="amber", size="1"),
+                        width="100%", align="center",
+                    ),
+                ),
+                rx.cond(
+                    State.nutrition_micro_is_partial,
+                    rx.text(
+                        "일부 재료는 단위 환산이 안 되어 부분 합계입니다 (참고용).",
+                        size="1", color="gray",
+                    ),
+                ),
+                rx.foreach(
+                    State.nutrition_condition_notes,
+                    lambda note: rx.callout(note, color_scheme="amber", width="100%", size="1"),
+                ),
+                width="100%", spacing="2",
+            ),
+            rx.button(
+                "영양 목표 확인", size="2", variant="soft",
+                on_click=State.fetch_nutrition_fit, loading=State.nutrition_loading,
+            ),
+        ),
+        rx.cond(
+            State.nutrition_error != "",
+            rx.callout(State.nutrition_error, color_scheme="red", width="100%"),
+        ),
+        width="100%", spacing="2",
+    )
+
+
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
         rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
@@ -1003,6 +1116,7 @@ def recipe_detail_view() -> rx.Component:
         ),
         substitution_section(),
         price_section(),
+        nutrition_section(),
         rx.heading("조리 단계", size="4"),
         rx.vstack(
             rx.foreach(State.recipe_steps, recipe_step_row),
