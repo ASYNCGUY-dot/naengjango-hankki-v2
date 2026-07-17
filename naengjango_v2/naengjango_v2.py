@@ -44,6 +44,8 @@ class State(rx.State):
     supplement_items: list[str] = []
     supplement_chip_input: str = ""
 
+    main_tab: str = "home"
+
     is_submitting: bool = False
     error_message: str = ""
     submitted_user_id: int | None = None
@@ -88,7 +90,6 @@ class State(rx.State):
     favorites_list: list[dict] = []
     favorites_error: str = ""
     loading_favorites: bool = False
-    showing_favorites: bool = False
 
     popular_categories: list[str] = []
     popular_videos_list: list[dict] = []
@@ -104,7 +105,6 @@ class State(rx.State):
     my_recipes_list: list[dict] = []
     my_recipes_error: str = ""
     loading_my_recipes: bool = False
-    showing_my_recipes: bool = False
     my_recipe_menu_name: str = ""
     my_recipe_category: str = ""
     my_recipe_calorie: str = ""
@@ -160,7 +160,6 @@ class State(rx.State):
     my_ingredient_submissions_error: str = ""
 
     is_admin: bool = False
-    showing_admin: bool = False
     admin_code_input: str = ""
     admin_promote_error: str = ""
     admin_pending_recipes: list[dict] = []
@@ -586,16 +585,17 @@ class State(rx.State):
         self.ingredient_submission_submitting = False
 
     @rx.event
-    def open_admin(self):
-        self.showing_admin = True
-        self.showing_favorites = False
-        self.showing_my_recipes = False
-        if self.is_admin:
-            self._fetch_admin_pending()
-
-    @rx.event
-    def close_admin(self):
-        self.showing_admin = False
+    def set_main_tab(self, tab: str):
+        self.main_tab = tab
+        self.selected_recipe = None
+        if tab == "community":
+            self._fetch_favorites_list()
+            if not self.popular_categories:
+                self._fetch_popular_categories()
+        elif tab == "mypage":
+            self._fetch_my_recipes()
+            if self.is_admin:
+                self._fetch_admin_pending()
 
     def _fetch_admin_pending(self):
         self.admin_loading = True
@@ -873,8 +873,7 @@ class State(rx.State):
             self.review_error = f"요약 실패 ({response.status_code})"
         self.summarizing = False
 
-    @rx.event
-    def load_favorites(self):
+    def _fetch_favorites_list(self):
         self.loading_favorites = True
         self.favorites_error = ""
         try:
@@ -885,18 +884,9 @@ class State(rx.State):
             return
         if response.status_code == 200:
             self.favorites_list = response.json()
-            self.showing_favorites = True
-            self.showing_my_recipes = False
-            self.showing_admin = False
         else:
             self.favorites_error = f"조회 실패 ({response.status_code})"
         self.loading_favorites = False
-
-    @rx.event
-    def close_favorites(self):
-        self.showing_favorites = False
-        self.showing_my_recipes = False
-        self.showing_admin = False
 
     def _fetch_my_recipes(self):
         try:
@@ -912,15 +902,6 @@ class State(rx.State):
         else:
             self.my_recipes_error = f"조회 실패 ({response.status_code})"
 
-    @rx.event
-    def load_my_recipes(self):
-        self.loading_my_recipes = True
-        self._fetch_my_recipes()
-        self.showing_favorites = False
-        self.showing_my_recipes = True
-        self.showing_admin = False
-        self.loading_my_recipes = False
-
     def _reset_my_recipe_form(self):
         self.my_recipe_menu_name = ""
         self.my_recipe_category = ""
@@ -929,11 +910,6 @@ class State(rx.State):
         self.my_recipe_steps = ""
         self.my_recipe_editing_id = None
         self.my_recipe_form_error = ""
-
-    @rx.event
-    def close_my_recipes(self):
-        self.showing_my_recipes = False
-        self._reset_my_recipe_form()
 
     @rx.event
     def start_edit_my_recipe(self, recipe_id: int):
@@ -1537,7 +1513,7 @@ def recipe_detail_tab_bar() -> rx.Component:
 
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
-        rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
+        rx.button("← 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
         rx.cond(
             State.selected_recipe["image_url"],
             rx.image(src=State.selected_recipe["image_url"], width="100%", height="200px",
@@ -1633,7 +1609,7 @@ def favorite_list_item(item: dict) -> rx.Component:
             rx.button(
                 "상세보기",
                 size="1",
-                on_click=lambda: [State.close_favorites(), State.view_recipe(item["id"])],
+                on_click=lambda: State.view_recipe(item["id"]),
             ),
             width="100%",
             align="center",
@@ -1644,7 +1620,6 @@ def favorite_list_item(item: dict) -> rx.Component:
 
 def favorites_list_view() -> rx.Component:
     return rx.vstack(
-        rx.button("← 돌아가기", size="2", variant="soft", on_click=State.close_favorites),
         rx.heading("즐겨찾기한 레시피", size="6"),
         rx.cond(
             State.favorites_error != "",
@@ -1742,7 +1717,6 @@ def my_recipe_form() -> rx.Component:
 
 def my_recipes_view() -> rx.Component:
     return rx.vstack(
-        rx.button("← 돌아가기", size="2", variant="soft", on_click=State.close_my_recipes),
         rx.heading("내가 등록한 레시피", size="6"),
         my_recipe_form(),
         rx.divider(),
@@ -1800,7 +1774,6 @@ def admin_pending_ingredient_row(item: dict) -> rx.Component:
 
 def admin_view() -> rx.Component:
     return rx.vstack(
-        rx.button("← 돌아가기", size="2", variant="soft", on_click=State.close_admin),
         rx.heading("관리자", size="6"),
         rx.cond(
             State.is_admin,
@@ -2146,20 +2119,20 @@ def pantry_input_section() -> rx.Component:
     )
 
 
-def pantry_section() -> rx.Component:
+def home_view() -> rx.Component:
     return rx.vstack(
-        rx.hstack(
-            rx.heading("내 냉장고", size="6"),
-            rx.spacer(),
-            rx.button(
-                "즐겨찾기 보기",
-                size="2",
-                variant="soft",
-                loading=State.loading_favorites,
-                on_click=State.load_favorites,
-            ),
-            width="100%",
-        ),
+        rx.heading("안녕하세요!", size="6"),
+        rx.text("오늘 뭐 먹을지 고민되시나요? 냉장고 속 재료로 추천해드릴게요.", size="2", color="gray"),
+        seasonal_section(),
+        spacing="4",
+        width="100%",
+        max_width="480px",
+    )
+
+
+def fridge_view() -> rx.Component:
+    return rx.vstack(
+        rx.heading("내 냉장고", size="6"),
         rx.text(f"user_id = {State.submitted_user_id}", color="gray", size="2"),
         pantry_input_section(),
         rx.cond(
@@ -2175,7 +2148,6 @@ def pantry_section() -> rx.Component:
             ),
             rx.text("아직 등록된 재료가 없습니다.", color="gray"),
         ),
-        seasonal_section(),
         catalog_search_section(),
         ingredient_submission_section(),
         rx.cond(
@@ -2183,8 +2155,37 @@ def pantry_section() -> rx.Component:
             rx.callout(State.safety_error, color_scheme="red", width="100%"),
         ),
         safety_result_panel(),
+        spacing="4",
+        width="100%",
+        max_width="480px",
+    )
+
+
+def recommend_view() -> rx.Component:
+    return rx.vstack(
         recommendation_section(),
+        width="100%",
+        max_width="480px",
+    )
+
+
+def community_view() -> rx.Component:
+    return rx.vstack(
+        favorites_list_view(),
         popular_videos_section(),
+        spacing="4",
+        width="100%",
+        max_width="480px",
+    )
+
+
+def mypage_view() -> rx.Component:
+    return rx.vstack(
+        rx.heading("마이페이지", size="6"),
+        rx.text(f"user_id = {State.submitted_user_id}", color="gray", size="2"),
+        my_recipes_view(),
+        rx.divider(),
+        admin_view(),
         spacing="4",
         width="100%",
         max_width="480px",
@@ -2195,19 +2196,27 @@ def main_area() -> rx.Component:
     return rx.cond(
         State.submitted_user_id != None,  # noqa: E711
         rx.cond(
-            State.showing_favorites,
-            favorites_list_view(),
-            rx.cond(
-                State.showing_my_recipes,
-                my_recipes_view(),
-                rx.cond(
-                    State.showing_admin,
-                    admin_view(),
-                    rx.cond(State.selected_recipe != None, recipe_detail_view(), pantry_section()),  # noqa: E711
-                ),
+            State.selected_recipe != None,  # noqa: E711
+            recipe_detail_view(),
+            rx.match(
+                State.main_tab,
+                ("fridge", fridge_view()),
+                ("recommend", recommend_view()),
+                ("community", community_view()),
+                ("mypage", mypage_view()),
+                home_view(),
             ),
         ),
         onboarding_form(),
+    )
+
+
+def bottom_nav_button(label: str, icon_name: str, tab_key: str, extra_events: list | None = None) -> rx.Component:
+    events = [State.set_main_tab(tab_key)] + (extra_events or [])
+    return rx.button(
+        rx.vstack(rx.icon(icon_name, size=18), rx.text(label, size="1"), spacing="0"),
+        variant=rx.cond(State.main_tab == tab_key, "solid", "ghost"),
+        on_click=events, flex="1",
     )
 
 
@@ -2215,22 +2224,11 @@ def bottom_nav() -> rx.Component:
     return rx.cond(
         (State.submitted_user_id != None) & (State.selected_recipe == None),  # noqa: E711
         rx.hstack(
-            rx.button(
-                rx.vstack(rx.icon("refrigerator", size=18), rx.text("냉장고", size="1"), spacing="0"),
-                variant="ghost", on_click=State.close_favorites, flex="1",
-            ),
-            rx.button(
-                rx.vstack(rx.icon("sparkles", size=18), rx.text("추천", size="1"), spacing="0"),
-                variant="ghost", on_click=State.get_recommendations, flex="1",
-            ),
-            rx.button(
-                rx.vstack(rx.icon("heart", size=18), rx.text("즐겨찾기", size="1"), spacing="0"),
-                variant="ghost", on_click=State.load_favorites, flex="1",
-            ),
-            rx.button(
-                rx.vstack(rx.icon("book-open", size=18), rx.text("내레시피", size="1"), spacing="0"),
-                variant="ghost", on_click=State.load_my_recipes, flex="1",
-            ),
+            bottom_nav_button("홈", "house", "home"),
+            bottom_nav_button("냉장고", "refrigerator", "fridge"),
+            bottom_nav_button("추천", "sparkles", "recommend", [State.get_recommendations()]),
+            bottom_nav_button("커뮤니티", "users", "community"),
+            bottom_nav_button("마이페이지", "user", "mypage"),
             width="100%",
             max_width="480px",
             position="fixed",
@@ -2249,10 +2247,6 @@ def app_header() -> rx.Component:
     return rx.hstack(
         rx.image(src="/logo.svg", height="64px"),
         rx.spacer(),
-        rx.cond(
-            State.submitted_user_id != None,  # noqa: E711
-            rx.icon_button("shield", variant="ghost", size="2", on_click=State.open_admin),
-        ),
         rx.color_mode.button(),
         width="100%",
         max_width="480px",
