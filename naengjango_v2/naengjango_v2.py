@@ -50,6 +50,13 @@ class State(rx.State):
     is_submitting: bool = False
     error_message: str = ""
     submitted_user_id: int | None = None
+    profile_complete: bool = False
+
+    auth_mode: str = "login"
+    auth_username: str = ""
+    auth_password: str = ""
+    auth_error: str = ""
+    is_authenticating: bool = False
 
     pantry_items: list[dict] = []
     new_ingredient_name: str = ""
@@ -217,6 +224,97 @@ class State(rx.State):
         self.supplement_items = [i for i in self.supplement_items if i != item]
 
     @rx.event
+    def set_auth_mode(self, mode: str):
+        self.auth_mode = mode
+        self.auth_error = ""
+
+    @rx.event
+    def signup(self):
+        if not self.auth_username.strip() or not self.auth_password.strip():
+            self.auth_error = "아이디와 비밀번호를 입력해주세요."
+            return
+        self.is_authenticating = True
+        self.auth_error = ""
+        try:
+            response = requests.post(
+                f"{API_BASE}/auth/signup",
+                json={"username": self.auth_username.strip(), "password": self.auth_password},
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            self.auth_error = f"서버에 연결할 수 없습니다: {e}"
+            self.is_authenticating = False
+            return
+        if response.status_code == 200:
+            self.submitted_user_id = response.json()["user_id"]
+            self.profile_complete = False
+            self.auth_password = ""
+        elif response.status_code == 409:
+            self.auth_error = "이미 존재하는 아이디입니다."
+        else:
+            self.auth_error = f"회원가입 실패 ({response.status_code})"
+        self.is_authenticating = False
+
+    @rx.event
+    def login(self):
+        if not self.auth_username.strip() or not self.auth_password.strip():
+            self.auth_error = "아이디와 비밀번호를 입력해주세요."
+            return
+        self.is_authenticating = True
+        self.auth_error = ""
+        try:
+            response = requests.post(
+                f"{API_BASE}/auth/login",
+                json={"username": self.auth_username.strip(), "password": self.auth_password},
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            self.auth_error = f"서버에 연결할 수 없습니다: {e}"
+            self.is_authenticating = False
+            return
+        if response.status_code != 200:
+            self.auth_error = (
+                "아이디 또는 비밀번호가 올바르지 않습니다." if response.status_code == 401
+                else f"로그인 실패 ({response.status_code})"
+            )
+            self.is_authenticating = False
+            return
+        self.submitted_user_id = response.json()["user_id"]
+        self.auth_password = ""
+        self._load_profile_after_login()
+        self.is_authenticating = False
+
+    def _load_profile_after_login(self):
+        try:
+            response = requests.get(f"{API_BASE}/profile/{self.submitted_user_id}", timeout=10)
+        except requests.RequestException as e:
+            self.auth_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code != 200:
+            self.auth_error = f"프로필 조회 실패 ({response.status_code})"
+            return
+        data = response.json()
+        self.profile_complete = data["has_profile"]
+        if self.profile_complete:
+            self.gender = data["gender"] or GENDER_OPTIONS[0]
+            self.age_group = data["age_group"] or "20대"
+            self.allergy_items = [a.strip() for a in (data["allergy"] or "").split(",") if a.strip()]
+            self.health_goal = data["health_goal"] or ""
+            self.purpose = data["purpose"] or ""
+            self.cooking_level = data["cooking_level"] or COOKING_LEVEL_OPTIONS[0]
+            self.supplement_items = [
+                s.strip() for s in (data["supplements"] or "").split(",")
+                if s.strip() and s.strip() != "없음"
+            ]
+            self.household_size = str(data["household_size"]) if data["household_size"] else "1"
+            self.novelty_pref = data["novelty_pref"] or NOVELTY_OPTIONS[0]
+            self.cooking_tools = data["cooking_tools"] or ""
+            self.medical_conditions = data["medical_conditions"] or ""
+            self._fetch_pantry()
+            self._fetch_popular_categories()
+            self._fetch_seasonal()
+
+    @rx.event
     def submit_profile(self):
         self.is_submitting = True
         self.error_message = ""
@@ -241,14 +339,14 @@ class State(rx.State):
             "medical_conditions": self.medical_conditions,
         }
         try:
-            response = requests.post(f"{API_BASE}/profile", json=payload, timeout=10)
+            response = requests.put(f"{API_BASE}/profile/{self.submitted_user_id}", json=payload, timeout=10)
         except requests.RequestException as e:
             self.error_message = f"서버에 연결할 수 없습니다: {e}"
             self.is_submitting = False
             return
 
         if response.status_code == 200:
-            self.submitted_user_id = response.json()["user_id"]
+            self.profile_complete = True
             self._fetch_pantry()
             self._fetch_popular_categories()
             self._fetch_seasonal()
@@ -1079,6 +1177,65 @@ def chip_input(
             width="100%",
         ),
         width="100%", spacing="2",
+    )
+
+
+def auth_form() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.image(src="/logo.svg", height="80px"),
+            rx.hstack(
+                rx.button(
+                    "로그인", flex="1",
+                    variant=rx.cond(State.auth_mode == "login", "solid", "soft"),
+                    on_click=lambda: State.set_auth_mode("login"),
+                ),
+                rx.button(
+                    "회원가입", flex="1",
+                    variant=rx.cond(State.auth_mode == "signup", "solid", "soft"),
+                    on_click=lambda: State.set_auth_mode("signup"),
+                ),
+                width="100%",
+            ),
+            rx.vstack(
+                rx.text("아이디", size="2", weight="bold"),
+                rx.input(
+                    placeholder="아이디",
+                    value=State.auth_username,
+                    on_change=lambda v: State.set_field("auth_username", v),
+                    width="100%",
+                ),
+                width="100%", spacing="1",
+            ),
+            rx.vstack(
+                rx.text("비밀번호", size="2", weight="bold"),
+                rx.input(
+                    placeholder="비밀번호",
+                    value=State.auth_password,
+                    on_change=lambda v: State.set_field("auth_password", v),
+                    type="password",
+                    width="100%",
+                ),
+                width="100%", spacing="1",
+            ),
+            rx.cond(
+                State.auth_error != "",
+                rx.callout(State.auth_error, color_scheme="red", width="100%"),
+            ),
+            rx.cond(
+                State.auth_mode == "login",
+                rx.button(
+                    "로그인", on_click=State.login, loading=State.is_authenticating,
+                    width="100%", size="3",
+                ),
+                rx.button(
+                    "회원가입", on_click=State.signup, loading=State.is_authenticating,
+                    width="100%", size="3",
+                ),
+            ),
+            spacing="4", width="100%", align="center",
+        ),
+        width="100%", max_width="480px", variant="surface", size="3",
     )
 
 
@@ -2358,18 +2515,22 @@ def main_area() -> rx.Component:
     return rx.cond(
         State.submitted_user_id != None,  # noqa: E711
         rx.cond(
-            State.selected_recipe != None,  # noqa: E711
-            recipe_detail_view(),
-            rx.match(
-                State.main_tab,
-                ("fridge", fridge_view()),
-                ("recommend", recommend_view()),
-                ("community", community_view()),
-                ("mypage", mypage_view()),
-                home_view(),
+            State.profile_complete,
+            rx.cond(
+                State.selected_recipe != None,  # noqa: E711
+                recipe_detail_view(),
+                rx.match(
+                    State.main_tab,
+                    ("fridge", fridge_view()),
+                    ("recommend", recommend_view()),
+                    ("community", community_view()),
+                    ("mypage", mypage_view()),
+                    home_view(),
+                ),
             ),
+            onboarding_form(),
         ),
-        onboarding_form(),
+        auth_form(),
     )
 
 
@@ -2384,7 +2545,7 @@ def bottom_nav_button(label: str, icon_name: str, tab_key: str, extra_events: li
 
 def bottom_nav() -> rx.Component:
     return rx.cond(
-        (State.submitted_user_id != None) & (State.selected_recipe == None),  # noqa: E711
+        (State.submitted_user_id != None) & (State.profile_complete) & (State.selected_recipe == None),  # noqa: E711
         rx.hstack(
             bottom_nav_button("홈", "house", "home"),
             bottom_nav_button("냉장고", "refrigerator", "fridge"),

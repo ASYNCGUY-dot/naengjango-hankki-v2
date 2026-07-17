@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.deps import get_db
-from src.agents import profile_agent
+from src.agents import profile_agent, recommendation_agent
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -31,6 +31,32 @@ class ProfileRequest(BaseModel):
 
 class ProfileResponse(BaseModel):
     user_id: int
+
+
+class ProfileGetResponse(BaseModel):
+    has_profile: bool
+    gender: str | None = None
+    age_group: str | None = None
+    allergy: str | None = None
+    health_goal: str | None = None
+    purpose: str | None = None
+    cooking_level: str | None = None
+    supplements: str | None = None
+    household_size: int | None = None
+    novelty_pref: str | None = None
+    cooking_tools: str | None = None
+    medical_conditions: str | None = None
+
+
+@router.get("/{user_id}", response_model=ProfileGetResponse)
+def get_profile(user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+    profile = recommendation_agent.get_user_profile(cur, user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")
+    return ProfileGetResponse(
+        has_profile=profile["gender"] is not None,
+        **{k: v for k, v in profile.items() if k != "id"},
+    )
 
 
 @router.post("", response_model=ProfileResponse)
