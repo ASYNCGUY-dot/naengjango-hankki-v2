@@ -1368,29 +1368,40 @@ def substitution_section() -> rx.Component:
     )
 
 
+def price_included_row(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(f"· {item['ingredient']}", size="2"),
+        rx.spacer(),
+        rx.text(f"{item['cost']}원", size="2", color="gray"),
+        width="100%",
+    )
+
+
 def price_section() -> rx.Component:
+    tier_color = rx.cond(
+        State.price_tier == "프리미엄", "red",
+        rx.cond(State.price_tier == "가성비", "green", "gray"),
+    )
     return rx.vstack(
         rx.divider(),
+        rx.heading("가격대별 등급", size="4"),
         rx.cond(
             State.price_fetched,
-            rx.vstack(
-                rx.hstack(
-                    rx.heading("예상 재료비", size="4"),
-                    rx.spacer(),
-                    rx.badge(
-                        State.price_tier,
-                        color_scheme=rx.cond(
-                            State.price_tier == "프리미엄", "red",
-                            rx.cond(State.price_tier == "가성비", "green", "gray"),
+            rx.card(
+                rx.vstack(
+                    rx.badge(f"{State.price_tier}형", color_scheme=tier_color, size="2"),
+                    rx.heading(f"약 {State.price_total_cost}원", size="6"),
+                    rx.text("1인분 기준 · 포함된 재료만의 부분 합계", size="1", color="gray"),
+                    rx.cond(
+                        State.price_included.length() > 0,
+                        rx.vstack(
+                            rx.foreach(State.price_included, price_included_row),
+                            width="100%", spacing="1", padding_top="2",
                         ),
                     ),
-                    width="100%", align="center",
+                    align="start", spacing="2", width="100%",
                 ),
-                rx.text(
-                    f"포함된 재료 기준 약 {State.price_total_cost}원 · 참고용, 최신 가격은 KAMIS 등에서 재확인 권장",
-                    size="2", color="gray",
-                ),
-                width="100%", spacing="2",
+                width="100%", variant="surface",
             ),
             rx.button(
                 "예상 재료비 확인", size="2", variant="soft",
@@ -1400,6 +1411,10 @@ def price_section() -> rx.Component:
         rx.cond(
             State.price_error != "",
             rx.callout(State.price_error, color_scheme="red", width="100%"),
+        ),
+        rx.text(
+            "참고용 가격입니다. 최신 가격은 KAMIS 등 공식 채널에서 다시 확인해주세요.",
+            size="1", color="gray",
         ),
         width="100%", spacing="2",
     )
