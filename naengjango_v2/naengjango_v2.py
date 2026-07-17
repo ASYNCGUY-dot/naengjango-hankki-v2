@@ -1253,14 +1253,17 @@ def recipe_step_row(step: dict) -> rx.Component:
 
 def review_row(r: dict) -> rx.Component:
     return rx.card(
-        rx.vstack(
-            rx.hstack(
-                rx.text(r["username"], weight="bold", size="2"),
-                rx.badge(f"★ {r['rating']}/5", color_scheme="amber"),
+        rx.hstack(
+            rx.avatar(fallback=r["username"], radius="full", size="2"),
+            rx.vstack(
+                rx.hstack(
+                    rx.text(r["username"], weight="bold", size="2"),
+                    rx.badge(f"★ {r['rating']}/5", color_scheme="amber"),
+                ),
+                rx.text(r["review_text"], size="2"),
+                spacing="1", align="start",
             ),
-            rx.text(r["review_text"], size="2"),
-            width="100%",
-            spacing="1",
+            width="100%", align="start",
         ),
         width="100%",
     )
@@ -1269,14 +1272,14 @@ def review_row(r: dict) -> rx.Component:
 def review_section() -> rx.Component:
     return rx.vstack(
         rx.divider(),
-        rx.heading("후기", size="4"),
+        rx.heading("유저 후기", size="4"),
         rx.cond(
             State.review_error != "",
             rx.callout(State.review_error, color_scheme="red", width="100%"),
         ),
         rx.cond(
             State.reviews_list.length() > 0,
-            rx.vstack(rx.foreach(State.reviews_list, review_row), width="100%"),
+            rx.vstack(rx.foreach(State.reviews_list, review_row), width="100%", spacing="2"),
             rx.text("아직 후기가 없습니다.", color="gray", size="2"),
         ),
         rx.button(
@@ -1288,7 +1291,14 @@ def review_section() -> rx.Component:
         ),
         rx.cond(
             State.review_summary != "",
-            rx.callout(State.review_summary, color_scheme="blue", width="100%"),
+            rx.card(
+                rx.vstack(
+                    rx.text("AI 요약", weight="bold", size="2", color=rx.color("blue", 11)),
+                    rx.text(State.review_summary, size="2"),
+                    align="start", spacing="1",
+                ),
+                width="100%", variant="surface",
+            ),
         ),
         rx.hstack(
             rx.select(
