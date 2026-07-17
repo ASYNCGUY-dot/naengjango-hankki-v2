@@ -43,6 +43,7 @@ class State(rx.State):
     allergy_chip_input: str = ""
     supplement_items: list[str] = []
     supplement_chip_input: str = ""
+    onboarding_step: int = 1
 
     main_tab: str = "home"
 
@@ -180,6 +181,16 @@ class State(rx.State):
         return rx.call_script(
             "if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js'); }"
         )
+
+    @rx.event
+    def next_onboarding_step(self):
+        if self.onboarding_step < 5:
+            self.onboarding_step += 1
+
+    @rx.event
+    def prev_onboarding_step(self):
+        if self.onboarding_step > 1:
+            self.onboarding_step -= 1
 
     @rx.event
     def add_allergy_chip(self):
@@ -1062,41 +1073,103 @@ def chip_input(
     )
 
 
+def onboarding_progress_dot(n: int) -> rx.Component:
+    return rx.box(
+        width="10px", height="10px", border_radius="50%",
+        background=rx.cond(State.onboarding_step >= n, rx.color("grass", 9), rx.color("gray", 5)),
+    )
+
+
+def onboarding_progress_dots() -> rx.Component:
+    return rx.hstack(
+        onboarding_progress_dot(1), onboarding_progress_dot(2), onboarding_progress_dot(3),
+        onboarding_progress_dot(4), onboarding_progress_dot(5),
+        spacing="2", justify="center", width="100%",
+    )
+
+
+def onboarding_step_1() -> rx.Component:
+    return rx.vstack(
+        labeled_select("성별", "gender", GENDER_OPTIONS),
+        labeled_input("연령대", "age_group", "예: 20대"),
+        width="100%", spacing="3",
+    )
+
+
+def onboarding_step_2() -> rx.Component:
+    return rx.vstack(
+        chip_input(
+            "알레르기 (선택)", State.allergy_items, "allergy_chip_input", State.allergy_chip_input,
+            State.add_allergy_chip, State.remove_allergy_chip, "예: 새우, 땅콩",
+        ),
+        chip_input(
+            "복용 중인 영양제 (선택)", State.supplement_items, "supplement_chip_input",
+            State.supplement_chip_input, State.add_supplement_chip, State.remove_supplement_chip,
+            "예: 종합비타민",
+        ),
+        width="100%", spacing="3",
+    )
+
+
+def onboarding_step_3() -> rx.Component:
+    return rx.vstack(
+        labeled_input("건강 목표", "health_goal", "예: 체중감량"),
+        labeled_input("이용 목적", "purpose", "예: 자취생 식단관리"),
+        width="100%", spacing="3",
+    )
+
+
+def onboarding_step_4() -> rx.Component:
+    return rx.vstack(
+        labeled_select("요리 수준", "cooking_level", COOKING_LEVEL_OPTIONS),
+        labeled_input("가구 인원", "household_size", "숫자로 입력"),
+        width="100%", spacing="3",
+    )
+
+
+def onboarding_step_5() -> rx.Component:
+    return rx.vstack(
+        labeled_select("메뉴 선호", "novelty_pref", NOVELTY_OPTIONS),
+        labeled_input("보유 조리도구 (콤마로 구분)", "cooking_tools", "예: 가스레인지,전자레인지"),
+        labeled_input("병력 정보 (선택)", "medical_conditions", "없으면 비워두세요"),
+        width="100%", spacing="3",
+    )
+
+
 def onboarding_form() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.heading("건강 정보를 입력해주세요", size="5"),
             rx.text("추천의 정확도를 높이기 위해 필요해요.", size="2", color="gray"),
-            labeled_select("성별", "gender", GENDER_OPTIONS),
-            labeled_input("연령대", "age_group", "예: 20대"),
-            chip_input(
-                "알레르기 (선택)", State.allergy_items, "allergy_chip_input", State.allergy_chip_input,
-                State.add_allergy_chip, State.remove_allergy_chip, "예: 새우, 땅콩",
+            onboarding_progress_dots(),
+            rx.match(
+                State.onboarding_step,
+                (1, onboarding_step_1()),
+                (2, onboarding_step_2()),
+                (3, onboarding_step_3()),
+                (4, onboarding_step_4()),
+                onboarding_step_5(),
             ),
-            labeled_input("건강 목표", "health_goal", "예: 체중감량"),
-            labeled_input("이용 목적", "purpose", "예: 자취생 식단관리"),
-            labeled_select("요리 수준", "cooking_level", COOKING_LEVEL_OPTIONS),
-            chip_input(
-                "복용 중인 영양제 (선택)", State.supplement_items, "supplement_chip_input",
-                State.supplement_chip_input, State.add_supplement_chip, State.remove_supplement_chip,
-                "예: 종합비타민",
-            ),
-            labeled_input("가구 인원", "household_size", "숫자로 입력"),
-            labeled_select("메뉴 선호", "novelty_pref", NOVELTY_OPTIONS),
-            labeled_input("보유 조리도구 (콤마로 구분)", "cooking_tools", "예: 가스레인지,전자레인지"),
-            labeled_input("병력 정보 (선택)", "medical_conditions", "없으면 비워두세요"),
             rx.cond(
                 State.error_message != "",
                 rx.callout(State.error_message, color_scheme="red", width="100%"),
             ),
-            rx.button(
-                "다음",
-                on_click=State.submit_profile,
-                loading=State.is_submitting,
-                width="100%",
-                size="3",
+            rx.hstack(
+                rx.cond(
+                    State.onboarding_step > 1,
+                    rx.button("이전", variant="soft", on_click=State.prev_onboarding_step, flex="1"),
+                ),
+                rx.cond(
+                    State.onboarding_step < 5,
+                    rx.button("다음", on_click=State.next_onboarding_step, flex="1"),
+                    rx.button(
+                        "프로필 저장", on_click=State.submit_profile,
+                        loading=State.is_submitting, flex="1",
+                    ),
+                ),
+                width="100%", spacing="2",
             ),
-            spacing="3",
+            spacing="4",
             width="100%",
         ),
         width="100%",
