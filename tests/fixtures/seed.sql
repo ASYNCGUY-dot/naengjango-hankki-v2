@@ -1,0 +1,195 @@
+-- pytest용 최소 시드 DB 스키마. data/app.db(로컬 전용, 68MB, gitignore됨)에서
+-- CREATE TABLE 구문만 그대로 복사하고, 테스트에 필요한 최소한의 참고 데이터만 몇 줄
+-- 손으로 채워 넣었다. 이 파일은 git에 커밋돼 있어서 로컬은 물론 CI(GitHub Actions)에서도
+-- 똑같이 재현 가능하다 - data/app.db가 없는 환경에서도 tests/conftest.py가 이 파일로
+-- DB를 새로 만들어 테스트를 돌린다.
+
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gender TEXT,
+    age_group TEXT,
+    allergy TEXT,
+    health_goal TEXT,
+    purpose TEXT,
+    cooking_level TEXT,
+    supplements TEXT,
+    household_size INTEGER,
+    novelty_pref TEXT
+, username TEXT, password_hash TEXT, cooking_tools TEXT, is_admin INTEGER DEFAULT 0, medical_conditions TEXT);
+
+-- sqlite_sequence는 AUTOINCREMENT 컬럼이 있으면 sqlite가 알아서 만들어주는 내부
+-- 테이블이라 여기서 직접 CREATE하면 안 된다(위 users 테이블의 AUTOINCREMENT가
+-- 자동으로 만들어준다).
+
+CREATE TABLE ingredients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    name TEXT,
+    source_type TEXT,
+    expiry_date TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE recipes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    menu_name TEXT,
+    cook_method TEXT,
+    category TEXT,
+    calorie REAL,
+    nutrients_json TEXT,
+    image_url TEXT,
+    youtube_url TEXT,
+    source_api TEXT,
+    steps_json TEXT
+, submitted_by INTEGER, status TEXT DEFAULT 'approved');
+
+CREATE TABLE recipe_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id INTEGER,
+    tag_type TEXT,
+    tag_value TEXT,
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id)
+);
+
+CREATE TABLE safety_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ingredient_name TEXT,
+    notice_text TEXT,
+    source_url TEXT,
+    created_at TEXT
+);
+
+CREATE TABLE recipe_ingredients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id INTEGER,
+    name TEXT,
+    amount REAL,
+    unit TEXT,
+    raw_text TEXT,
+    base_servings INTEGER,
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id)
+);
+
+CREATE TABLE reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id INTEGER,
+    user_id INTEGER,
+    rating INTEGER,
+    review_text TEXT,
+    created_at TEXT,
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE review_summaries (
+    recipe_id INTEGER PRIMARY KEY,
+    summary_text TEXT,
+    review_count INTEGER,
+    updated_at TEXT,
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id)
+);
+
+CREATE TABLE favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    recipe_id INTEGER,
+    created_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id)
+);
+
+CREATE TABLE recipe_likes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id INTEGER,
+    user_id INTEGER,
+    created_at TEXT,
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE ingredient_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ingredient_name TEXT,
+    submitted_by INTEGER,
+    calorie REAL,
+    carbs_g REAL,
+    protein_g REAL,
+    fat_g REAL,
+    sodium_mg REAL,
+    price_per_100g REAL,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT,
+    reviewed_at TEXT,
+    reviewed_by INTEGER,
+    FOREIGN KEY (submitted_by) REFERENCES users(id),
+    FOREIGN KEY (reviewed_by) REFERENCES users(id)
+);
+
+CREATE TABLE ingredient_catalog (
+    food_code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    db_group TEXT,
+    energy_kcal REAL,
+    water_g REAL,
+    protein_g REAL,
+    fat_g REAL,
+    ash_g REAL,
+    carbs_g REAL,
+    sugar_g REAL,
+    fiber_g REAL,
+    calcium_mg REAL,
+    iron_mg REAL,
+    potassium_mg REAL,
+    sodium_mg REAL,
+    vitamin_a_ug REAL,
+    vitamin_b1_mg REAL,
+    vitamin_b2_mg REAL,
+    niacin_mg REAL,
+    vitamin_c_mg REAL,
+    vitamin_d_ug REAL,
+    magnesium_mg REAL,
+    zinc_mg REAL,
+    updated_at TEXT
+);
+
+CREATE TABLE ingredient_favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    food_code TEXT,
+    created_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (food_code) REFERENCES ingredient_catalog(food_code)
+);
+
+CREATE TABLE popular_videos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT,
+    video_title TEXT,
+    channel_title TEXT,
+    video_id TEXT,
+    thumbnail_url TEXT,
+    video_url TEXT,
+    view_count INTEGER,
+    fetched_at TEXT
+);
+
+CREATE TABLE user_partner_keys (
+    user_id INTEGER PRIMARY KEY,
+    coupang_access_key_encrypted TEXT,
+    coupang_secret_key_encrypted TEXT,
+    updated_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- 최소 시드 데이터: 재료 즐겨찾기/검색 테스트용 실제 식품영양성분DB 값 (두부, P106-000000100-0001)
+INSERT INTO ingredient_catalog (
+    food_code, name, db_group, energy_kcal, water_g, protein_g, fat_g, ash_g,
+    carbs_g, sugar_g, fiber_g, calcium_mg, iron_mg, potassium_mg, sodium_mg,
+    vitamin_a_ug, vitamin_b1_mg, vitamin_b2_mg, niacin_mg, vitamin_c_mg,
+    vitamin_d_ug, magnesium_mg, zinc_mg
+) VALUES (
+    'P106-000000100-0001', '두부', '원재료성', 97.0, 81.2, 9.62, 4.63, 0.8,
+    3.75, 0.0, 2.9, 64.0, 1.54, 132.0, 1.0,
+    NULL, 0.03, 0.18, 0.16, 0.0,
+    0.0, 80.0, 1.17
+);

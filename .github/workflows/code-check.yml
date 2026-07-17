@@ -1,15 +1,13 @@
 name: 코드 점검 (자동)
 
 # 이 파일이 하는 일: GitHub에 코드를 push하거나 PR을 올릴 때마다,
-# GitHub가 무료로 제공하는 임시 컴퓨터(runner) 하나를 띄워서 코드에
-# 문법 오류나 "정의 안 된 변수를 쓰는" 같은 명백한 실수가 없는지 자동으로 확인한다.
-#
-# 주의: 이건 pytest 같은 "기능이 실제로 잘 동작하는지" 테스트가 아니다(그건 아직 없음,
-# 지침 1-5 참고). 여기서는 딱 두 가지만 본다:
+# GitHub가 무료로 제공하는 임시 컴퓨터(runner) 하나를 띄워서 코드를 세 단계로 점검한다.
 #   1) 모든 .py 파일이 문법적으로 정상인가 (컴파일이 되는가)
 #   2) import 안 된 이름을 쓰는 등 pyflakes가 잡아내는 명백한 버그가 있는가
-# DB 연결이나 API 키가 필요한 부분은 실제로 "실행"하지 않고 문법만 훑기 때문에,
-# .env 파일이나 data/app.db가 없는 GitHub 서버에서도 안전하게 돌아간다.
+#   3) tests/의 pytest가 실제로 API가 기대대로 동작하는지 검증한다 (2026-07-17 추가)
+# pytest는 tests/fixtures/seed.sql로 매번 새로 만드는 임시 sqlite DB를 쓰고, 매 요청을
+# FastAPI dependency override로 그 sqlite에 연결한다 - 그래서 POSTGRES_URL이나 .env,
+# data/app.db(로컬 전용, gitignore됨) 없이도 GitHub 서버에서 그대로 돌아간다.
 
 on:
   push:
@@ -38,7 +36,7 @@ jobs:
       - name: 의존성 설치
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
           pip install flake8
 
       # 4) 문법 오류 점검: 모든 .py 파일이 정상적으로 컴파일되는지 확인
@@ -51,3 +49,7 @@ jobs:
       #     초보 개발자가 스타일 지적에 압도되지 않고 "진짜 버그"만 보게 하기 위함)
       - name: 명백한 버그 확인 (flake8)
         run: flake8 . --select=E9,F63,F7,F82 --show-source
+
+      # 6) 기능 테스트: API가 실제로 기대대로 동작하는지 pytest로 확인
+      - name: pytest 실행
+        run: pytest tests/ -v

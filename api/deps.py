@@ -7,6 +7,11 @@ Postgres(Supabase)로 전환 완료.
   - SqliteStyleCursor.execute(): SQL 안의 "?"를 psycopg2가 쓰는 "%s"로 바꿔서 실행한다.
   - SqliteStyleCursor.lastrowid: sqlite3의 lastrowid를 흉내내서, INSERT 직후
     SELECT lastval()로 방금 생성된 시퀀스 값을 돌려준다.
+
+커넥션 풀은 지연 생성한다(첫 get_db() 호출 시점에 생성) - 모듈을 그냥 import만
+해도 즉시 Postgres에 연결을 시도하던 이전 방식은, POSTGRES_URL이 없는 환경(예:
+pytest가 get_db를 오버라이드해서 실제로 DB에 붙지 않는 테스트, .env 없는 CI)에서
+import 시점에 바로 크래시났다. tests/conftest.py 참고.
 """
 
 import os
@@ -38,13 +43,19 @@ class SqliteStyleCursor(psycopg2.extensions.cursor):
         return self.fetchone()[0]
 
 
-_pool = psycopg2.pool.ThreadedConnectionPool(
-    minconn=1, maxconn=10, dsn=POSTGRES_URL
-)
+_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+
+
+def get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=POSTGRES_URL)
+    return _pool
 
 
 def get_db() -> Generator[SqliteStyleCursor, None, None]:
-    conn = _pool.getconn()
+    pool = get_pool()
+    conn = pool.getconn()
     cur = conn.cursor(cursor_factory=SqliteStyleCursor)
     try:
         yield cur
@@ -54,4 +65,4 @@ def get_db() -> Generator[SqliteStyleCursor, None, None]:
         raise
     finally:
         cur.close()
-        _pool.putconn(conn)
+        pool.putconn(conn)
