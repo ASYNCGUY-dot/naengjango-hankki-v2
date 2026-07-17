@@ -1,8 +1,14 @@
 <svg viewBox="0 0 260 300" xmlns="http://www.w3.org/2000/svg">
-  <g fill="none" stroke="#3f7d55" stroke-width="6" stroke-linecap="round">
-    <path d="M60 45 C20 75, 15 140, 55 175" />
-    <path d="M175 220 C215 195, 225 130, 195 90" />
-  </g>
+  <!-- 원형 덩굴 테두리 -->
+  <path d="M128 28
+           C70 28, 24 74, 24 132
+           C24 190, 70 236, 128 236
+           C178 236, 220 200, 230 152"
+        fill="none" stroke="#6fae62" stroke-width="7" stroke-linecap="round"/>
+  <!-- 덩굴 끝 잎사귀 -->
+  <path d="M230 152 C240 148, 250 150, 254 160 C244 164, 234 162, 230 152 Z" fill="#6fae62"/>
+  <path d="M230 152 C232 142, 240 136, 250 138 C246 148, 238 154, 230 152 Z" fill="#8fc47f"/>
+
   <g>
     <path d="M85 45 L165 45 Q180 45 180 60 L180 205 Q180 220 165 220 L95 220 Q80 220 80 205 L80 60 Q80 45 95 45 Z"
           fill="#fdfdfb" stroke="#3f7d55" stroke-width="6"/>
@@ -21,9 +27,14 @@
           fill="#fdfdfb" stroke="#3f7d55" stroke-width="5"/>
     <path d="M178 55 Q178 40 192 40 Q206 40 206 55 L206 62 L178 62 Z" fill="#fdfdfb" stroke="#3f7d55" stroke-width="4"/>
     <line x1="176" y1="62" x2="208" y2="62" stroke="#3f7d55" stroke-width="4" stroke-linecap="round"/>
-    <g stroke="#f2a53c" stroke-width="3" stroke-linecap="round">
-      <path d="M222 30 L226 22 M230 33 L238 30 M224 40 L232 44"/>
-    </g>
+    <!-- 반짝임 (별 모양) -->
+    <path d="M228 28 L231 35 L238 38 L231 41 L228 48 L225 41 L218 38 L225 35 Z" fill="#f2a53c"/>
+    <path d="M238 48 L240 52 L244 54 L240 56 L238 60 L236 56 L232 54 L236 52 Z" fill="#f2a53c"/>
+  </g>
+  <!-- 워드마크 앞 잎사귀 장식 -->
+  <g transform="translate(38, 238)">
+    <path d="M0 20 C-2 10, 4 2, 12 0 C12 10, 8 18, 0 20 Z" fill="#6fae62"/>
+    <path d="M4 20 C6 12, 12 6, 20 6 C18 14, 12 20, 4 20 Z" fill="#8fc47f"/>
   </g>
   <text x="130" y="258" text-anchor="middle" font-family="Pretendard, 'Malgun Gothic', sans-serif" font-weight="700" font-size="34">
     <tspan fill="#2f5d40">냉장고</tspan>

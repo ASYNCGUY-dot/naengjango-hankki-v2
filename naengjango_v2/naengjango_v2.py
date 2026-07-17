@@ -32,6 +32,11 @@ class State(rx.State):
     cooking_tools: str = ""
     medical_conditions: str = ""
 
+    allergy_items: list[str] = []
+    allergy_chip_input: str = ""
+    supplement_items: list[str] = []
+    supplement_chip_input: str = ""
+
     is_submitting: bool = False
     error_message: str = ""
     submitted_user_id: int | None = None
@@ -168,6 +173,28 @@ class State(rx.State):
         )
 
     @rx.event
+    def add_allergy_chip(self):
+        value = self.allergy_chip_input.strip()
+        if value and value not in self.allergy_items:
+            self.allergy_items.append(value)
+        self.allergy_chip_input = ""
+
+    @rx.event
+    def remove_allergy_chip(self, item: str):
+        self.allergy_items = [i for i in self.allergy_items if i != item]
+
+    @rx.event
+    def add_supplement_chip(self):
+        value = self.supplement_chip_input.strip()
+        if value and value not in self.supplement_items:
+            self.supplement_items.append(value)
+        self.supplement_chip_input = ""
+
+    @rx.event
+    def remove_supplement_chip(self, item: str):
+        self.supplement_items = [i for i in self.supplement_items if i != item]
+
+    @rx.event
     def submit_profile(self):
         self.is_submitting = True
         self.error_message = ""
@@ -181,11 +208,11 @@ class State(rx.State):
         payload = {
             "gender": self.gender,
             "age_group": self.age_group,
-            "allergy": self.allergy,
+            "allergy": ",".join(self.allergy_items),
             "health_goal": self.health_goal,
             "purpose": self.purpose,
             "cooking_level": self.cooking_level,
-            "supplements": self.supplements,
+            "supplements": ",".join(self.supplement_items) or "없음",
             "household_size": household_size_int,
             "novelty_pref": self.novelty_pref,
             "cooking_tools": self.cooking_tools,
@@ -981,32 +1008,84 @@ def labeled_select(label: str, field: str, options: list[str]) -> rx.Component:
     )
 
 
-def onboarding_form() -> rx.Component:
+def chip_input(
+    label: str, items, input_field: str, input_value, add_event, remove_event, placeholder: str = ""
+) -> rx.Component:
     return rx.vstack(
-        labeled_select("성별", "gender", GENDER_OPTIONS),
-        labeled_input("연령대", "age_group", "예: 20대"),
-        labeled_input("알레르기 (콤마로 구분)", "allergy", "예: 새우,땅콩"),
-        labeled_input("건강 목표", "health_goal", "예: 체중감량"),
-        labeled_input("이용 목적", "purpose", "예: 자취생 식단관리"),
-        labeled_select("요리 수준", "cooking_level", COOKING_LEVEL_OPTIONS),
-        labeled_input("복용 중인 보충제", "supplements", "없으면 '없음'"),
-        labeled_input("가구 인원", "household_size", "숫자로 입력"),
-        labeled_select("메뉴 선호", "novelty_pref", NOVELTY_OPTIONS),
-        labeled_input("보유 조리도구 (콤마로 구분)", "cooking_tools", "예: 가스레인지,전자레인지"),
-        labeled_input("병력 정보 (선택)", "medical_conditions", "없으면 비워두세요"),
+        rx.text(label, size="2", weight="bold"),
         rx.cond(
-            State.error_message != "",
-            rx.callout(State.error_message, color_scheme="red", width="100%"),
+            items.length() > 0,
+            rx.hstack(
+                rx.foreach(
+                    items,
+                    lambda item: rx.badge(
+                        rx.hstack(
+                            rx.text(item, size="2"),
+                            rx.icon("x", size=12, cursor="pointer", on_click=lambda: remove_event(item)),
+                            spacing="1", align="center",
+                        ),
+                        color_scheme="grass", variant="soft", size="2",
+                    ),
+                ),
+                wrap="wrap", width="100%",
+            ),
         ),
-        rx.button(
-            "프로필 저장",
-            on_click=State.submit_profile,
-            loading=State.is_submitting,
+        rx.hstack(
+            rx.input(
+                placeholder=placeholder,
+                value=input_value,
+                on_change=lambda v: State.set_field(input_field, v),
+                on_key_down=lambda k: rx.cond(k == "Enter", add_event(), rx.noop()),
+                width="100%",
+            ),
+            rx.button("+ 추가", on_click=add_event, size="2", variant="soft"),
             width="100%",
         ),
-        spacing="3",
+        width="100%", spacing="2",
+    )
+
+
+def onboarding_form() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.heading("건강 정보를 입력해주세요", size="5"),
+            rx.text("추천의 정확도를 높이기 위해 필요해요.", size="2", color="gray"),
+            labeled_select("성별", "gender", GENDER_OPTIONS),
+            labeled_input("연령대", "age_group", "예: 20대"),
+            chip_input(
+                "알레르기 (선택)", State.allergy_items, "allergy_chip_input", State.allergy_chip_input,
+                State.add_allergy_chip, State.remove_allergy_chip, "예: 새우, 땅콩",
+            ),
+            labeled_input("건강 목표", "health_goal", "예: 체중감량"),
+            labeled_input("이용 목적", "purpose", "예: 자취생 식단관리"),
+            labeled_select("요리 수준", "cooking_level", COOKING_LEVEL_OPTIONS),
+            chip_input(
+                "복용 중인 영양제 (선택)", State.supplement_items, "supplement_chip_input",
+                State.supplement_chip_input, State.add_supplement_chip, State.remove_supplement_chip,
+                "예: 종합비타민",
+            ),
+            labeled_input("가구 인원", "household_size", "숫자로 입력"),
+            labeled_select("메뉴 선호", "novelty_pref", NOVELTY_OPTIONS),
+            labeled_input("보유 조리도구 (콤마로 구분)", "cooking_tools", "예: 가스레인지,전자레인지"),
+            labeled_input("병력 정보 (선택)", "medical_conditions", "없으면 비워두세요"),
+            rx.cond(
+                State.error_message != "",
+                rx.callout(State.error_message, color_scheme="red", width="100%"),
+            ),
+            rx.button(
+                "다음",
+                on_click=State.submit_profile,
+                loading=State.is_submitting,
+                width="100%",
+                size="3",
+            ),
+            spacing="3",
+            width="100%",
+        ),
         width="100%",
         max_width="480px",
+        variant="surface",
+        size="3",
     )
 
 
