@@ -237,6 +237,9 @@ class State(rx.State):
         if not self.auth_username.strip() or not self.auth_password.strip():
             self.auth_error = "아이디와 비밀번호를 입력해주세요."
             return
+        if len(self.auth_password) < 8:
+            self.auth_error = "비밀번호는 최소 8자 이상이어야 합니다."
+            return
         self.is_authenticating = True
         self.auth_error = ""
         try:
@@ -255,6 +258,11 @@ class State(rx.State):
             self.auth_password = ""
         elif response.status_code == 409:
             self.auth_error = "이미 존재하는 아이디입니다."
+        elif response.status_code == 422:
+            try:
+                self.auth_error = response.json().get("detail", "입력값을 확인해주세요.")
+            except ValueError:
+                self.auth_error = "입력값을 확인해주세요."
         else:
             self.auth_error = f"회원가입 실패 ({response.status_code})"
         self.is_authenticating = False

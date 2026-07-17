@@ -5,6 +5,10 @@ signup/login 함수 자체는 수정하지 않고 그대로 가져다 쓴다.
 로그인 무차별 대입 방지: 이 라우터 계층에서만 아이디별 실패 횟수를 인메모리로 세서
 잠깐 잠근다. HTTP 계층의 관심사라 auth_agent.py는 건드리지 않는다. Render 단일
 인스턴스 기준 - 재시작/재배포되면 카운터가 초기화되지만 이 규모에서는 감내할 만하다.
+
+비밀번호 최소 길이(MIN_PASSWORD_LENGTH): auth_agent.signup()은 비밀번호 형식을 전혀
+검증하지 않아서(1글자도 통과) 이 라우터 계층에서 최소 길이만 확인한다 - 마찬가지로
+HTTP 계층의 관심사라 auth_agent.py는 건드리지 않는다.
 """
 
 import sqlite3
@@ -19,6 +23,8 @@ from api.deps import get_db
 from src.agents import auth_agent
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+MIN_PASSWORD_LENGTH = 8
 
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCKOUT_WINDOW_SECONDS = 15 * 60
@@ -66,6 +72,11 @@ class LoginResponse(BaseModel):
 
 @router.post("/signup", response_model=SignupResponse)
 def signup(body: SignupRequest, cur: sqlite3.Cursor = Depends(get_db)):
+    if len(body.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"비밀번호는 최소 {MIN_PASSWORD_LENGTH}자 이상이어야 합니다.",
+        )
     user_id = auth_agent.signup(cur, body.username, body.password)
     if user_id is None:
         raise HTTPException(status_code=409, detail="이미 존재하는 아이디입니다.")

@@ -16,7 +16,7 @@ PROFILE_PAYLOAD = {
 
 
 def _signup(client, username: str) -> int:
-    res = client.post("/auth/signup", json={"username": username, "password": "pw12345"})
+    res = client.post("/auth/signup", json={"username": username, "password": "pw123456"})
     return res.json()["user_id"]
 
 
