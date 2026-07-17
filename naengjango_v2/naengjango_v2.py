@@ -112,6 +112,10 @@ class State(rx.State):
     catalog_error: str = ""
     catalog_searching: bool = False
 
+    favorite_ingredient_codes: list[str] = []
+    favorite_ingredients_list: list[dict] = []
+    favorite_ingredients_error: str = ""
+
     my_recipes_list: list[dict] = []
     my_recipes_error: str = ""
     loading_my_recipes: bool = False
@@ -313,6 +317,7 @@ class State(rx.State):
             self._fetch_pantry()
             self._fetch_popular_categories()
             self._fetch_seasonal()
+            self._fetch_favorite_ingredients()
 
     @rx.event
     def logout(self):
@@ -506,6 +511,34 @@ class State(rx.State):
             self._fetch_seasonal()
         else:
             self.pantry_error = f"추가 실패 ({response.status_code})"
+
+    def _fetch_favorite_ingredients(self):
+        try:
+            response = requests.get(
+                f"{API_BASE}/ingredients/{self.submitted_user_id}/favorites", timeout=10
+            )
+        except requests.RequestException as e:
+            self.favorite_ingredients_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.favorite_ingredients_list = response.json()
+            self.favorite_ingredient_codes = [item["food_code"] for item in self.favorite_ingredients_list]
+        else:
+            self.favorite_ingredients_error = f"불러오기 실패 ({response.status_code})"
+
+    @rx.event
+    def toggle_ingredient_favorite(self, food_code: str):
+        try:
+            response = requests.post(
+                f"{API_BASE}/ingredients/{self.submitted_user_id}/{food_code}/toggle", timeout=10
+            )
+        except requests.RequestException as e:
+            self.favorite_ingredients_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self._fetch_favorite_ingredients()
+        else:
+            self.favorite_ingredients_error = f"즐겨찾기 실패 ({response.status_code})"
 
     @rx.event
     def remove_ingredient(self, ingredient_id: int):
@@ -707,6 +740,8 @@ class State(rx.State):
             self._fetch_favorites_list()
             if not self.popular_categories:
                 self._fetch_popular_categories()
+        elif tab == "fridge":
+            self._fetch_favorite_ingredients()
         elif tab == "mypage":
             self._fetch_my_recipes()
             if self.is_admin:
@@ -2211,6 +2246,15 @@ def catalog_result_row(item: dict) -> rx.Component:
                 spacing="0",
             ),
             rx.spacer(),
+            rx.icon_button(
+                rx.cond(
+                    State.favorite_ingredient_codes.contains(item["food_code"]),
+                    rx.icon("star", size=16, color=rx.color("amber", 9)),
+                    rx.icon("star", size=16),
+                ),
+                size="1", variant="soft",
+                on_click=lambda: State.toggle_ingredient_favorite(item["food_code"]),
+            ),
             rx.button(
                 "냉장고에 추가",
                 size="1",
@@ -2220,6 +2264,37 @@ def catalog_result_row(item: dict) -> rx.Component:
             align="center",
         ),
         width="100%",
+    )
+
+
+def favorite_ingredient_row(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.icon("star", size=14, color=rx.color("amber", 9)),
+        rx.text(item["name"], size="2"),
+        rx.spacer(),
+        rx.text(f"{item['energy_kcal']}kcal", size="1", color="gray"),
+        rx.icon_button(
+            rx.icon("x", size=14),
+            size="1", variant="ghost", color_scheme="gray",
+            on_click=lambda: State.toggle_ingredient_favorite(item["food_code"]),
+        ),
+        width="100%", align="center",
+    )
+
+
+def favorite_ingredients_section() -> rx.Component:
+    return rx.cond(
+        State.favorite_ingredients_list.length() > 0,
+        rx.vstack(
+            rx.divider(),
+            rx.heading("즐겨찾는 재료", size="4"),
+            rx.cond(
+                State.favorite_ingredients_error != "",
+                rx.callout(State.favorite_ingredients_error, color_scheme="red", width="100%"),
+            ),
+            rx.foreach(State.favorite_ingredients_list, favorite_ingredient_row),
+            width="100%", spacing="2",
+        ),
     )
 
 
@@ -2472,6 +2547,7 @@ def fridge_view() -> rx.Component:
             rx.text("아직 등록된 재료가 없습니다.", color="gray"),
         ),
         catalog_search_section(),
+        favorite_ingredients_section(),
         ingredient_submission_section(),
         rx.cond(
             State.safety_error != "",
