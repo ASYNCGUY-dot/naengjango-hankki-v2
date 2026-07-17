@@ -122,6 +122,11 @@ class State(rx.State):
     seasonal_matches: list[str] = []
     seasonal_error: str = ""
 
+    shopping_links: list[dict] = []
+    shopping_loading: bool = False
+    shopping_error: str = ""
+    shopping_fetched: bool = False
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -379,6 +384,8 @@ class State(rx.State):
             self.price_error = ""
             self.nutrition_fetched = False
             self.nutrition_error = ""
+            self.shopping_fetched = False
+            self.shopping_error = ""
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
 
@@ -437,6 +444,28 @@ class State(rx.State):
         else:
             self.nutrition_error = f"조회 실패 ({response.status_code})"
         self.nutrition_loading = False
+
+    @rx.event
+    def fetch_shopping_links(self):
+        recipe_id = self.selected_recipe["id"]
+        self.shopping_loading = True
+        self.shopping_error = ""
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/recipes/{recipe_id}/shopping-links",
+                params={"user_id": self.submitted_user_id},
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            self.shopping_error = f"서버에 연결할 수 없습니다: {e}"
+            self.shopping_loading = False
+            return
+        if response.status_code == 200:
+            self.shopping_links = response.json()["links"]
+            self.shopping_fetched = True
+        else:
+            self.shopping_error = f"조회 실패 ({response.status_code})"
+        self.shopping_loading = False
 
     def _fetch_substitution(self, recipe_id: int):
         try:
@@ -1100,6 +1129,48 @@ def nutrition_section() -> rx.Component:
     )
 
 
+def shopping_link_row(link: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(link["ingredient"], size="2", weight="medium"),
+        rx.spacer(),
+        rx.link("네이버쇼핑", href=link["naver"], is_external=True, size="2"),
+        rx.link("쿠팡", href=link["coupang"], is_external=True, size="2"),
+        width="100%",
+        align="center",
+    )
+
+
+def shopping_section() -> rx.Component:
+    return rx.vstack(
+        rx.divider(),
+        rx.cond(
+            State.shopping_fetched,
+            rx.vstack(
+                rx.heading("부족한 재료 구매 링크", size="4"),
+                rx.text(
+                    "검색 결과 페이지로 연결됩니다 (실제 상품·가격·재고는 보장하지 않습니다).",
+                    size="1", color="gray",
+                ),
+                rx.cond(
+                    State.shopping_links.length() > 0,
+                    rx.vstack(rx.foreach(State.shopping_links, shopping_link_row), width="100%", spacing="2"),
+                    rx.text("구매가 필요한 재료가 없습니다.", size="2", color="gray"),
+                ),
+                width="100%", spacing="2",
+            ),
+            rx.button(
+                "구매 링크 보기", size="2", variant="soft",
+                on_click=State.fetch_shopping_links, loading=State.shopping_loading,
+            ),
+        ),
+        rx.cond(
+            State.shopping_error != "",
+            rx.callout(State.shopping_error, color_scheme="red", width="100%"),
+        ),
+        width="100%", spacing="2",
+    )
+
+
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
         rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
@@ -1139,6 +1210,7 @@ def recipe_detail_view() -> rx.Component:
         substitution_section(),
         price_section(),
         nutrition_section(),
+        shopping_section(),
         rx.heading("조리 단계", size="4"),
         rx.vstack(
             rx.foreach(State.recipe_steps, recipe_step_row),
