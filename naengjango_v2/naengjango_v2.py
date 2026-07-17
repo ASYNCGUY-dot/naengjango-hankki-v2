@@ -118,6 +118,10 @@ class State(rx.State):
     nutrition_error: str = ""
     nutrition_fetched: bool = False
 
+    seasonal_ingredients: list[str] = []
+    seasonal_matches: list[str] = []
+    seasonal_error: str = ""
+
     @rx.event
     def set_field(self, field: str, value: str):
         setattr(self, field, value)
@@ -167,9 +171,24 @@ class State(rx.State):
             self.submitted_user_id = response.json()["user_id"]
             self._fetch_pantry()
             self._fetch_popular_categories()
+            self._fetch_seasonal()
         else:
             self.error_message = f"저장 실패 ({response.status_code}): {response.text}"
         self.is_submitting = False
+
+    def _fetch_seasonal(self):
+        try:
+            response = requests.get(f"{API_BASE}/seasonal/{self.submitted_user_id}/matches", timeout=10)
+        except requests.RequestException as e:
+            self.seasonal_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            data = response.json()
+            self.seasonal_ingredients = data["seasonal_ingredients"]
+            self.seasonal_matches = data["matches"]
+            self.seasonal_error = ""
+        else:
+            self.seasonal_error = f"조회 실패 ({response.status_code})"
 
     def _fetch_popular_categories(self):
         try:
@@ -238,6 +257,7 @@ class State(rx.State):
             self.new_ingredient_name = ""
             self.new_ingredient_expiry = ""
             self._fetch_pantry()
+            self._fetch_seasonal()
         else:
             self.pantry_error = f"추가 실패 ({response.status_code})"
 
@@ -275,6 +295,7 @@ class State(rx.State):
             return
         if response.status_code == 200:
             self._fetch_pantry()
+            self._fetch_seasonal()
         else:
             self.pantry_error = f"추가 실패 ({response.status_code})"
 
@@ -289,6 +310,7 @@ class State(rx.State):
             return
         if response.status_code == 200:
             self._fetch_pantry()
+            self._fetch_seasonal()
         else:
             self.pantry_error = f"삭제 실패 ({response.status_code})"
 
@@ -1380,6 +1402,36 @@ def catalog_search_section() -> rx.Component:
     )
 
 
+def seasonal_section() -> rx.Component:
+    return rx.cond(
+        State.seasonal_ingredients.length() > 0,
+        rx.vstack(
+            rx.divider(),
+            rx.heading("이 달의 제철 재료", size="4"),
+            rx.hstack(
+                rx.foreach(State.seasonal_ingredients, lambda name: rx.badge(name, color_scheme="orange")),
+                wrap="wrap",
+                width="100%",
+            ),
+            rx.cond(
+                State.seasonal_matches.length() > 0,
+                rx.hstack(
+                    rx.text("보유 재료 중 제철 품목:", size="2", color="grass"),
+                    rx.foreach(State.seasonal_matches, lambda name: rx.badge(name, color_scheme="grass")),
+                    wrap="wrap",
+                    width="100%",
+                ),
+            ),
+            rx.cond(
+                State.seasonal_error != "",
+                rx.callout(State.seasonal_error, color_scheme="red", width="100%"),
+            ),
+            width="100%",
+            spacing="2",
+        ),
+    )
+
+
 def pantry_section() -> rx.Component:
     return rx.vstack(
         rx.hstack(
@@ -1424,6 +1476,7 @@ def pantry_section() -> rx.Component:
             ),
             rx.text("아직 등록된 재료가 없습니다.", color="gray"),
         ),
+        seasonal_section(),
         catalog_search_section(),
         rx.cond(
             State.safety_error != "",

@@ -12,6 +12,7 @@ from api.routers import (
     recommendation,
     review,
     safety,
+    seasonal,
     substitution,
     user_recipe,
 )
@@ -31,6 +32,7 @@ app.include_router(ingredient_catalog.router)
 app.include_router(user_recipe.router)
 app.include_router(price.router)
 app.include_router(nutrition.router)
+app.include_router(seasonal.router)
 
 
 @app.get("/health")
