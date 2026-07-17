@@ -14,8 +14,14 @@ load_dotenv()
 API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 
+class YouTubeQuotaExceededError(Exception):
+    """YouTube Data API가 할당량 초과(429/403, quotaExceeded 등) 또는 그 외 에러 응답을 준 경우."""
+
+
 def search_youtube_video(query: str) -> str | None:
-    """검색어로 유튜브 영상을 찾아 첫 번째 결과의 URL을 반환한다. 실패하면 None."""
+    """검색어로 유튜브 영상을 찾아 첫 번째 결과의 URL을 반환한다.
+    검색 결과가 없으면 None. 할당량 초과 등 API 에러 응답이면 YouTubeQuotaExceededError를 던진다
+    (호출부가 '결과 없음'과 '더 이상 시도해도 소용없음'을 구분할 수 있도록)."""
     if not API_KEY:
         return None
 
@@ -31,14 +37,23 @@ def search_youtube_video(query: str) -> str | None:
     try:
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
-        items = data.get("items", [])
-        if not items:
-            return None
-        video_id = items[0]["id"]["videoId"]
-        return f"https://www.youtube.com/watch?v={video_id}"
     except Exception as e:
         print(f"(경고) 유튜브 검색 실패 ({query}): {e}")
         return None
+
+    # HTTP 상태 코드가 200이 아니거나 응답 JSON에 "error" 키가 있으면
+    # (예: 429/403 quotaExceeded, rateLimitExceeded) 정상 응답이 아니라 API 에러다.
+    # 이 경우 response.json()은 예외 없이 파싱되고 "items"가 없어서, 그냥 두면
+    # "검색 결과 없음"과 구분되지 않는다.
+    if response.status_code != 200 or "error" in data:
+        print(f"(경고) 할당량 초과 또는 API 에러 ({query}): status={response.status_code}, {data.get('error')}")
+        raise YouTubeQuotaExceededError(f"status={response.status_code}: {data.get('error')}")
+
+    items = data.get("items", [])
+    if not items:
+        return None
+    video_id = items[0]["id"]["videoId"]
+    return f"https://www.youtube.com/watch?v={video_id}"
 
 
 if __name__ == "__main__":

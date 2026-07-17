@@ -16,7 +16,7 @@ import psycopg2
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "agents"))
-from youtube_agent import search_youtube_video  # noqa: E402
+from youtube_agent import search_youtube_video, YouTubeQuotaExceededError  # noqa: E402
 
 load_dotenv()
 
@@ -47,8 +47,17 @@ def main(limit: int = 50):
     print(f"이번 실행에서 처리할 레시피 {len(rows)}개")
 
     filled = 0
+    tried = 0
+    quota_exceeded = False
     for recipe_id, menu_name in rows:
-        url = search_youtube_video(f"{menu_name} 레시피")
+        tried += 1
+        try:
+            url = search_youtube_video(f"{menu_name} 레시피")
+        except YouTubeQuotaExceededError:
+            # 할당량이 소진되면 남은 레시피를 순회해도 계속 실패만 하니 즉시 중단한다.
+            quota_exceeded = True
+            break
+
         cur.execute("UPDATE recipes SET youtube_url = %s WHERE id = %s", (url, recipe_id))
         conn.commit()
         status = url or "(검색 결과 없음)"
@@ -58,6 +67,8 @@ def main(limit: int = 50):
 
     cur.close()
     conn.close()
+    if quota_exceeded:
+        print(f"할당량 초과로 중단: {len(rows)}개 중 {tried}개만 시도했다")
     print(f"완료: {filled}/{len(rows)}개 채움")
 
 
