@@ -68,6 +68,7 @@ class State(rx.State):
     selected_recipe: dict | None = None
     recipe_steps: list[dict] = []
     recipe_detail_error: str = ""
+    recipe_detail_tab: str = "recipe"
 
     recipe_favorited: bool = False
     favorite_error: str = ""
@@ -451,6 +452,7 @@ class State(rx.State):
     @rx.event
     def view_recipe(self, recipe_id: int):
         self.recipe_detail_error = ""
+        self.recipe_detail_tab = "recipe"
         try:
             response = requests.get(f"{API_BASE}/recommendation/recipes/{recipe_id}", timeout=10)
         except requests.RequestException as e:
@@ -789,6 +791,10 @@ class State(rx.State):
         self.review_summary = ""
         self.substitution_coverage = {}
         self.substitution_missing = []
+
+    @rx.event
+    def set_recipe_detail_tab(self, tab: str):
+        self.recipe_detail_tab = tab
 
     def _check_favorited(self, recipe_id: int):
         try:
@@ -1203,10 +1209,11 @@ def recommendation_card(item: dict) -> rx.Component:
                 width="100%",
                 align="center",
             ),
-            rx.text(
-                f"{item['category']} · {item['calorie']}kcal · 겹치는 재료 {item['ingredient_overlap']}개",
-                size="2",
-                color="gray",
+            rx.hstack(
+                rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
+                rx.spacer(),
+                rx.badge(f"겹치는 재료 {item['ingredient_overlap']}개", color_scheme="grass", variant="soft"),
+                width="100%", align="center",
             ),
             rx.button("상세보기 (조리단계)", size="2", width="100%",
                       on_click=lambda: State.view_recipe(item["id"])),
@@ -1214,13 +1221,15 @@ def recommendation_card(item: dict) -> rx.Component:
             width="100%",
         ),
         width="100%",
+        variant="classic",
     )
 
 
 def recommendation_section() -> rx.Component:
     return rx.vstack(
         rx.divider(),
-        rx.heading("오늘의 추천", size="6"),
+        rx.heading("오늘은 어떤 메뉴가 좋을까요?", size="6"),
+        rx.text("보유 재료와 프로필을 기반으로 추천했어요.", size="2", color="gray"),
         rx.button(
             "추천 받기",
             on_click=State.get_recommendations,
@@ -1335,21 +1344,7 @@ def substitution_section() -> rx.Component:
     return rx.cond(
         State.substitution_coverage,
         rx.vstack(
-            rx.divider(),
-            rx.hstack(
-                rx.heading("재료 정보", size="4"),
-                rx.spacer(),
-                rx.cond(
-                    State.substitution_coverage["coverage_pct"] != None,  # noqa: E711
-                    rx.badge(
-                        f"보유 재료 사용률 {State.substitution_coverage['coverage_pct']}%",
-                        color_scheme="grass",
-                        size="2",
-                    ),
-                ),
-                width="100%",
-                align="center",
-            ),
+            rx.heading("부족한 재료 안내", size="4"),
             rx.cond(
                 State.substitution_error != "",
                 rx.callout(State.substitution_error, color_scheme="red", width="100%"),
@@ -1522,6 +1517,24 @@ def shopping_section() -> rx.Component:
     )
 
 
+def recipe_detail_tab_button(label: str, tab_key: str) -> rx.Component:
+    return rx.button(
+        label, size="2", flex="1",
+        variant=rx.cond(State.recipe_detail_tab == tab_key, "solid", "soft"),
+        on_click=lambda: State.set_recipe_detail_tab(tab_key),
+    )
+
+
+def recipe_detail_tab_bar() -> rx.Component:
+    return rx.hstack(
+        recipe_detail_tab_button("레시피", "recipe"),
+        recipe_detail_tab_button("영양정보", "nutrition"),
+        recipe_detail_tab_button("재료정보", "ingredients"),
+        recipe_detail_tab_button("영상", "video"),
+        width="100%", spacing="2",
+    )
+
+
 def recipe_detail_view() -> rx.Component:
     return rx.vstack(
         rx.button("← 추천 목록으로", size="2", variant="soft", on_click=State.back_to_recommendations),
@@ -1556,11 +1569,6 @@ def recipe_detail_view() -> rx.Component:
             color="gray",
         ),
         rx.cond(
-            State.selected_recipe["youtube_url"],
-            rx.link("▶ 유튜브에서 조리 영상 보기", href=State.selected_recipe["youtube_url"],
-                     is_external=True, color=rx.color("grass", 11), weight="bold"),
-        ),
-        rx.cond(
             State.favorite_error != "",
             rx.callout(State.favorite_error, color_scheme="red", width="100%"),
         ),
@@ -1568,15 +1576,46 @@ def recipe_detail_view() -> rx.Component:
             State.recipe_detail_error != "",
             rx.callout(State.recipe_detail_error, color_scheme="red", width="100%"),
         ),
-        substitution_section(),
-        price_section(),
-        nutrition_section(),
-        shopping_section(),
-        rx.heading("조리 단계", size="4"),
-        rx.vstack(
-            rx.foreach(State.recipe_steps, recipe_step_row),
-            width="100%",
-            spacing="1",
+        rx.cond(
+            State.substitution_coverage["coverage_pct"] != None,  # noqa: E711
+            rx.card(
+                rx.hstack(
+                    rx.vstack(
+                        rx.text("보유 재료 사용률", size="2", color="gray"),
+                        rx.heading(f"{State.substitution_coverage['coverage_pct']}%", size="7", color=rx.color("grass", 11)),
+                        align="start", spacing="0",
+                    ),
+                    rx.spacer(),
+                    rx.cond(
+                        State.substitution_missing.length() > 0,
+                        rx.badge(f"부족한 재료 {State.substitution_missing.length()}개", color_scheme="amber"),
+                    ),
+                    width="100%", align="center",
+                ),
+                width="100%",
+            ),
+        ),
+        recipe_detail_tab_bar(),
+        rx.match(
+            State.recipe_detail_tab,
+            ("nutrition", rx.vstack(price_section(), nutrition_section(), width="100%", padding_top="3")),
+            ("ingredients", rx.vstack(substitution_section(), shopping_section(), width="100%", padding_top="3")),
+            ("video", rx.vstack(
+                rx.cond(
+                    State.selected_recipe["youtube_url"],
+                    rx.link(
+                        "▶ 유튜브에서 조리 영상 보기", href=State.selected_recipe["youtube_url"],
+                        is_external=True, color=rx.color("grass", 11), weight="bold",
+                    ),
+                    rx.text("등록된 영상이 없습니다.", color="gray", size="2"),
+                ),
+                width="100%", padding_top="3",
+            )),
+            rx.vstack(
+                rx.heading("조리 단계", size="4"),
+                rx.vstack(rx.foreach(State.recipe_steps, recipe_step_row), width="100%", spacing="1"),
+                width="100%", spacing="3", padding_top="3",
+            ),
         ),
         review_section(),
         spacing="4",
