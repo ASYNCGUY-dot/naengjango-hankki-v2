@@ -277,10 +277,15 @@ class State(rx.State):
             self.is_authenticating = False
             return
         if response.status_code != 200:
-            self.auth_error = (
-                "아이디 또는 비밀번호가 올바르지 않습니다." if response.status_code == 401
-                else f"로그인 실패 ({response.status_code})"
-            )
+            if response.status_code == 401:
+                self.auth_error = "아이디 또는 비밀번호가 올바르지 않습니다."
+            elif response.status_code == 429:
+                try:
+                    self.auth_error = response.json().get("detail", "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.")
+                except ValueError:
+                    self.auth_error = "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요."
+            else:
+                self.auth_error = f"로그인 실패 ({response.status_code})"
             self.is_authenticating = False
             return
         self.submitted_user_id = response.json()["user_id"]
