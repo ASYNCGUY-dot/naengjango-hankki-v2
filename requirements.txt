@@ -1,11 +1,7 @@
 requests
 python-dotenv
 langgraph
-langchain
 openai
-google-genai
-anthropic
-tavily-python
 cryptography
 reflex
 fastapi

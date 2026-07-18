@@ -8,6 +8,11 @@ KAMIS 도매가격을 가져와 레시피의 가격 등급(estimate_recipe_price
 fetch_category_prices()가 그 shape을 가정하고 .get()을 호출하다 AttributeError로 죽는다.
 safety.py에서 식약처 API 무응답을 503으로 감싼 것과 같은 원칙 - agent 파일은 그대로 두고
 이 라우터 계층에서만 예외를 잡아 "일시적으로 응답하지 않음" 503으로 바꾼다.
+
+2026-07-19 추가: KAMIS는 부류(채소/곡물/축산/수산) 4개를 매 요청마다 순차 호출해서
+느리고, 그만큼 실패할 기회도 4배다. get_all_prices() 결과를 TTLCache로 10분간
+재사용해서 호출 빈도를 줄이고, 방금 실패해도 직전 성공 응답이 있으면 그대로 돌려준다
+(safety.py와 동일한 원칙, api/ttl_cache.py 참고).
 """
 
 import sqlite3
@@ -18,9 +23,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.deps import get_db
+from api.ttl_cache import TTLCache
 from src.agents import portion_agent, price_agent, recommendation_agent
 
 router = APIRouter(prefix="/recommendation/recipes", tags=["price"])
+
+_prices_cache = TTLCache(ttl_seconds=600)
 
 
 class MatchedIngredient(BaseModel):
@@ -76,7 +84,7 @@ def get_recipe_price(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends
     ingredient_names = [item["name"] for item in items]
 
     try:
-        all_items = price_agent.get_all_prices()
+        all_items = _prices_cache.get_or_fetch(price_agent.get_all_prices)
     except (requests.RequestException, AttributeError, ValueError, TypeError):
         raise HTTPException(
             status_code=503,

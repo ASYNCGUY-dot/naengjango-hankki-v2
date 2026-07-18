@@ -211,6 +211,15 @@ VALUES (
     NULL, NULL, 'public', '["단계 1"]', 'approved'
 );
 
+-- 2026-07-19 SUBSTITUTES 확장분(파프리카/피망 등) 검증용 - 재료 태그 1개짜리 최소 레시피.
+INSERT INTO recipes (id, menu_name, cook_method, category, calorie, nutrients_json, image_url, youtube_url, source_api, steps_json, status)
+VALUES (
+    3, '파프리카볶음', '볶음', '반찬', 80.0,
+    '{"energy_kcal": 80, "protein_g": 2, "fat_g": 4, "carbs_g": 6}',
+    NULL, NULL, 'public', '["단계 1"]', 'approved'
+);
+INSERT INTO recipe_tags (recipe_id, tag_type, tag_value) VALUES (3, 'ingredient', '파프리카');
+
 -- 최소 시드 데이터: 재료 즐겨찾기/검색 테스트용 실제 식품영양성분DB 값 (두부, P106-000000100-0001)
 INSERT INTO ingredient_catalog (
     food_code, name, db_group, energy_kcal, water_g, protein_g, fat_g, ash_g,
