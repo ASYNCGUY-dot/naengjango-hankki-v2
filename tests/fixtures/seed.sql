@@ -182,6 +182,35 @@ CREATE TABLE user_partner_keys (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+-- 최소 시드 데이터: recommendation/review/safety/price 라우터 테스트용 승인된 레시피 1개.
+-- 두부/양파 두 재료만 써서 recommendation_agent의 자격(qualifies) 판단이 쉽게 재현되게
+-- 했다 - 메뉴명에 "두부"가 그대로 들어있어 core_ingredients가 "두부"로 잡히므로, 보유
+-- 재료에 두부가 있으면 자격을 얻는다(recommendation_agent.py 9차 개정 참고).
+INSERT INTO recipes (id, menu_name, cook_method, category, calorie, nutrients_json, image_url, youtube_url, source_api, steps_json, status)
+VALUES (
+    1, '두부조림', '조림', '반찬', 120.0,
+    '{"energy_kcal": 120, "protein_g": 10, "fat_g": 5, "carbs_g": 8}',
+    NULL, NULL, 'public', '["두부를 썬다", "양파와 함께 졸인다"]', 'approved'
+);
+
+INSERT INTO recipe_tags (recipe_id, tag_type, tag_value) VALUES
+    (1, 'ingredient', '두부'),
+    (1, 'ingredient', '양파'),
+    (1, 'nutrition_group', '고단백');
+
+INSERT INTO recipe_ingredients (recipe_id, name, amount, unit, raw_text, base_servings) VALUES
+    (1, '두부', 200, 'g', '두부 200g', 2),
+    (1, '양파', 50, 'g', '양파 50g', 2);
+
+-- recipe_ingredients가 하나도 없는 승인된 레시피 - price/nutrition 라우터의
+-- "재료 수량 정보 없음" 404 분기를 테스트하기 위한 용도.
+INSERT INTO recipes (id, menu_name, cook_method, category, calorie, nutrients_json, image_url, youtube_url, source_api, steps_json, status)
+VALUES (
+    2, '재료수량정보없는레시피', '기타', '반찬', 100.0,
+    '{"energy_kcal": 100, "protein_g": 5, "fat_g": 3, "carbs_g": 10}',
+    NULL, NULL, 'public', '["단계 1"]', 'approved'
+);
+
 -- 최소 시드 데이터: 재료 즐겨찾기/검색 테스트용 실제 식품영양성분DB 값 (두부, P106-000000100-0001)
 INSERT INTO ingredient_catalog (
     food_code, name, db_group, energy_kcal, water_g, protein_g, fat_g, ash_g,
