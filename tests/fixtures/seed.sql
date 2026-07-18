@@ -77,6 +77,7 @@ CREATE TABLE reviews (
     rating INTEGER,
     review_text TEXT,
     created_at TEXT,
+    image_url TEXT,
     FOREIGN KEY (recipe_id) REFERENCES recipes(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );

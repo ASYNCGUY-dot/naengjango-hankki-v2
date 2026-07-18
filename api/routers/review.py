@@ -20,6 +20,7 @@ class ReviewRequest(BaseModel):
     user_id: int
     rating: int = Field(ge=1, le=5)
     review_text: str
+    image_url: str | None = None
 
 
 class ReviewItem(BaseModel):
@@ -27,6 +28,7 @@ class ReviewItem(BaseModel):
     review_text: str
     created_at: str
     username: str
+    image_url: str | None = None
 
 
 class SummaryResponse(BaseModel):
@@ -51,7 +53,7 @@ def create_review(recipe_id: int, body: ReviewRequest, cur: sqlite3.Cursor = Dep
     cur.execute("SELECT id FROM users WHERE id = ?", (body.user_id,))
     if cur.fetchone() is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")
-    review_agent.save_review(cur, recipe_id, body.user_id, body.rating, body.review_text)
+    review_agent.save_review(cur, recipe_id, body.user_id, body.rating, body.review_text, body.image_url)
     return {"saved": True}
 
 

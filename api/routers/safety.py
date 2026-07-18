@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.deps import get_db
-from src.agents import safety_agent
+from src.agents import pantry_agent, safety_agent
 
 router = APIRouter(prefix="/safety", tags=["safety"])
 
@@ -62,4 +62,61 @@ def check_safety(body: SafetyCheckRequest, cur: sqlite3.Cursor = Depends(get_db)
         recall_matches=recall_matches,
         expiry_status=expiry_status,
         saved_notes=saved,
+    )
+
+
+class IngredientSafetyStatus(BaseModel):
+    name: str
+    expiry_date: str | None
+    status: str  # "주의" 또는 "정상"
+    recall_summary: str  # 회수 이력을 미리 합쳐둔 문자열(없으면 "") - 프론트엔드 중첩 목록 제약 회피
+    expiry_status: str | None
+
+
+class SafetyOverviewResponse(BaseModel):
+    total: int
+    warning_count: int
+    normal_count: int
+    items: list[IngredientSafetyStatus]
+
+
+@router.get("/overview", response_model=SafetyOverviewResponse)
+def safety_overview(user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+    """보유 재료 전체를 한 번에 훑어서 전체/주의/정상으로 집계한다.
+    get_all_recalls()는 재료 개수와 무관하게 1번만 호출한다(N+1 방지)."""
+    pantry_items = pantry_agent.get_pantry_ingredients(cur, user_id)
+    if not pantry_items:
+        return SafetyOverviewResponse(total=0, warning_count=0, normal_count=0, items=[])
+
+    try:
+        recalls = safety_agent.get_all_recalls()
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=503,
+            detail="식약처 회수정보 서비스가 응답하지 않습니다. 잠시 후 다시 시도해주세요.",
+        )
+
+    items = []
+    warning_count = 0
+    for p in pantry_items:
+        name = p["name"]
+        expiry_date = p.get("expiry_date")
+        recall_matches = safety_agent.check_recall(name, recalls)
+        expiry_status = safety_agent.check_expiry(expiry_date) if expiry_date else None
+        is_warning = bool(recall_matches) or bool(expiry_status)
+        if is_warning:
+            warning_count += 1
+        notices = [f"{m.get('PRDTNM')}: {m.get('RTRVLPRVNS')}" for m in recall_matches]
+        items.append(IngredientSafetyStatus(
+            name=name, expiry_date=expiry_date,
+            status="주의" if is_warning else "정상",
+            recall_summary="; ".join(notices),
+            expiry_status=expiry_status,
+        ))
+
+    return SafetyOverviewResponse(
+        total=len(items),
+        warning_count=warning_count,
+        normal_count=len(items) - warning_count,
+        items=items,
     )

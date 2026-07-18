@@ -65,20 +65,30 @@ class State(rx.State):
     category_selected_ingredients: list[str] = []
     pantry_input_mode: str = "category"
 
-    safety_checked_name: str = ""
-    safety_recall_matches: list[dict] = []
-    safety_expiry_status: str = ""
-    safety_checking: bool = False
-    safety_error: str = ""
+    pantry_photo_uploading: bool = False
+    pantry_photo_error: str = ""
+    pantry_photo_detected: list[str] = []
+    pantry_photo_selected: list[str] = []
+
+    safety_overview_loading: bool = False
+    safety_overview_error: str = ""
+    safety_overview_fetched: bool = False
+    safety_overview_total: int = 0
+    safety_overview_warning: int = 0
+    safety_overview_normal: int = 0
+    safety_overview_items: list[dict] = []
+    safety_overview_filter: str = "전체"
 
     recommendations: list[dict] = []
     recommending: bool = False
     recommend_error: str = ""
+    recommend_filter: str = "전체"
 
     selected_recipe: dict | None = None
     recipe_steps: list[dict] = []
     recipe_detail_error: str = ""
     recipe_detail_tab: str = "recipe"
+    recipe_ingredients_list: list[dict] = []
 
     recipe_favorited: bool = False
     favorite_error: str = ""
@@ -86,6 +96,7 @@ class State(rx.State):
     substitution_coverage: dict = {}
     substitution_missing: list[dict] = []
     substitution_error: str = ""
+    substitution_detail_index: int = -1
 
     review_rating: str = "5"
     review_text_input: str = ""
@@ -96,6 +107,9 @@ class State(rx.State):
     review_error: str = ""
     submitting_review: bool = False
     summarizing: bool = False
+    review_photo_url: str = ""
+    review_photo_uploading: bool = False
+    review_photo_error: str = ""
 
     favorites_list: list[dict] = []
     favorites_error: str = ""
@@ -136,6 +150,22 @@ class State(rx.State):
     price_loading: bool = False
     price_error: str = ""
     price_fetched: bool = False
+
+    @rx.var
+    def price_cheap_count(self) -> int:
+        """부류 중앙값 대비 0.7배 이하(저렴)로 매칭된 재료 수 - 3단 비교 카드의 "가성비" 칸에 쓴다."""
+        return sum(1 for m in self.price_matched if m.get("ratio") is not None and m["ratio"] <= 0.7)
+
+    @rx.var
+    def price_expensive_count(self) -> int:
+        """부류 중앙값 대비 1.3배 이상(고가)로 매칭된 재료 수 - "프리미엄" 칸에 쓴다."""
+        return sum(1 for m in self.price_matched if m.get("ratio") is not None and m["ratio"] >= 1.3)
+
+    @rx.var
+    def price_normal_count(self) -> int:
+        """비교 가능한(ratio 있는) 재료 중 가성비/프리미엄 둘 다 아닌 나머지 - "기본" 칸에 쓴다."""
+        total = sum(1 for m in self.price_matched if m.get("ratio") is not None)
+        return total - self.price_cheap_count - self.price_expensive_count
 
     nutrition_bracket_label: str = ""
     nutrition_is_estimated: bool = False
@@ -488,6 +518,76 @@ class State(rx.State):
         self._fetch_seasonal()
 
     @rx.event
+    async def handle_pantry_photo_upload(self, files: list[rx.UploadFile]):
+        """냉장고 사진에서 OpenAI vision으로 재료명을 인식한다 - 인식 결과는 확인 후
+        선택한 것만 실제 냉장고(pantry)에 추가된다(자동 추가 아님)."""
+        self.pantry_photo_uploading = True
+        self.pantry_photo_error = ""
+        self.pantry_photo_detected = []
+        self.pantry_photo_selected = []
+        if not files:
+            self.pantry_photo_uploading = False
+            return
+        try:
+            import base64
+            from openai import OpenAI
+
+            data = await files[0].read()
+            b64 = base64.b64encode(data).decode("utf-8")
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "이 사진은 냉장고나 식재료 사진이야. 사진에서 알아볼 수 있는 "
+                                "식재료 이름만 한국어로, 쉼표로 구분해서 나열해줘. 설명이나 "
+                                "문장은 넣지 말고 재료명만 적어줘. 알아볼 수 있는 게 없으면 "
+                                "'없음'이라고만 답해줘."
+                            ),
+                        },
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                    ],
+                }],
+                max_tokens=200,
+            )
+            text = (response.choices[0].message.content or "").strip()
+            if text and text != "없음":
+                names = [n.strip() for n in text.replace("\n", ",").split(",") if n.strip()]
+                self.pantry_photo_detected = names[:15]
+            else:
+                self.pantry_photo_error = "사진에서 식재료를 알아보지 못했어요. 다른 사진으로 시도해주세요."
+        except Exception as e:
+            self.pantry_photo_error = f"재료 인식 실패: {e}"
+        self.pantry_photo_uploading = False
+
+    @rx.event
+    def toggle_pantry_photo_ingredient(self, name: str):
+        if name in self.pantry_photo_selected:
+            self.pantry_photo_selected = [n for n in self.pantry_photo_selected if n != name]
+        else:
+            self.pantry_photo_selected = self.pantry_photo_selected + [name]
+
+    @rx.event
+    def confirm_pantry_photo_ingredients(self):
+        for name in self.pantry_photo_selected:
+            try:
+                requests.post(
+                    f"{API_BASE}/pantry/{self.submitted_user_id}",
+                    json={"name": name, "expiry_date": None}, timeout=10,
+                )
+            except requests.RequestException as e:
+                self.pantry_photo_error = f"서버에 연결할 수 없습니다: {e}"
+                return
+        self.pantry_photo_detected = []
+        self.pantry_photo_selected = []
+        self._fetch_pantry()
+        self._fetch_seasonal()
+
+    @rx.event
     def search_catalog(self):
         self.catalog_searching = True
         self.catalog_error = ""
@@ -569,29 +669,46 @@ class State(rx.State):
             self.pantry_error = f"삭제 실패 ({response.status_code})"
 
     @rx.event
-    def check_safety(self, name: str, expiry_date: str | None):
-        self.safety_checking = True
-        self.safety_error = ""
-        payload = {"ingredient_name": name, "expiry_date": expiry_date}
+    def fetch_safety_overview(self):
+        self.safety_overview_loading = True
+        self.safety_overview_error = ""
         try:
-            response = requests.post(f"{API_BASE}/safety/check", json=payload, timeout=15)
+            response = requests.get(
+                f"{API_BASE}/safety/overview",
+                params={"user_id": self.submitted_user_id}, timeout=20,
+            )
         except requests.RequestException as e:
-            self.safety_error = f"서버에 연결할 수 없습니다: {e}"
-            self.safety_checking = False
+            self.safety_overview_error = f"서버에 연결할 수 없습니다: {e}"
+            self.safety_overview_loading = False
             return
         if response.status_code == 200:
             data = response.json()
-            self.safety_checked_name = name
-            self.safety_recall_matches = data["recall_matches"]
-            self.safety_expiry_status = data["expiry_status"] or ""
+            self.safety_overview_total = data["total"]
+            self.safety_overview_warning = data["warning_count"]
+            self.safety_overview_normal = data["normal_count"]
+            self.safety_overview_items = data["items"]
+            self.safety_overview_filter = "전체"
+            self.safety_overview_fetched = True
         elif response.status_code == 503:
             try:
-                self.safety_error = response.json().get("detail", "외부 서비스가 응답하지 않습니다. 잠시 후 다시 시도해주세요.")
+                self.safety_overview_error = response.json().get(
+                    "detail", "외부 서비스가 응답하지 않습니다. 잠시 후 다시 시도해주세요."
+                )
             except ValueError:
-                self.safety_error = "외부 서비스가 응답하지 않습니다. 잠시 후 다시 시도해주세요."
+                self.safety_overview_error = "외부 서비스가 응답하지 않습니다. 잠시 후 다시 시도해주세요."
         else:
-            self.safety_error = f"확인 실패 ({response.status_code})"
-        self.safety_checking = False
+            self.safety_overview_error = f"확인 실패 ({response.status_code})"
+        self.safety_overview_loading = False
+
+    @rx.event
+    def set_safety_overview_filter(self, value: str):
+        self.safety_overview_filter = value
+
+    @rx.var
+    def filtered_safety_items(self) -> list[dict]:
+        if self.safety_overview_filter == "전체":
+            return self.safety_overview_items
+        return [i for i in self.safety_overview_items if i.get("status") == self.safety_overview_filter]
 
     @rx.event
     def get_recommendations(self):
@@ -615,6 +732,16 @@ class State(rx.State):
         self.recommending = False
 
     @rx.event
+    def set_recommend_filter(self, value: str):
+        self.recommend_filter = value
+
+    @rx.var
+    def filtered_recommendations(self) -> list[dict]:
+        if self.recommend_filter == "전체":
+            return self.recommendations
+        return [r for r in self.recommendations if r.get("nutrition_group") == self.recommend_filter]
+
+    @rx.event
     def view_recipe(self, recipe_id: int):
         self.recipe_detail_error = ""
         self.recipe_detail_tab = "recipe"
@@ -632,6 +759,8 @@ class State(rx.State):
                 self.recipe_steps = []
             self.review_summary = ""
             self.review_error = ""
+            self.review_photo_url = ""
+            self.review_photo_error = ""
             self._fetch_reviews(recipe_id)
             self._check_favorited(recipe_id)
             self._fetch_substitution(recipe_id)
@@ -642,8 +771,21 @@ class State(rx.State):
             self.shopping_fetched = False
             self.shopping_error = ""
             self._fetch_like_status(recipe_id)
+            self._fetch_recipe_ingredients(recipe_id)
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
+
+    def _fetch_recipe_ingredients(self, recipe_id: int):
+        self.recipe_ingredients_list = []
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/recipes/{recipe_id}/ingredients",
+                params={"user_id": self.submitted_user_id}, timeout=10,
+            )
+        except requests.RequestException:
+            return
+        if response.status_code == 200:
+            self.recipe_ingredients_list = response.json()
 
     def _fetch_like_status(self, recipe_id: int):
         try:
@@ -934,6 +1076,7 @@ class State(rx.State):
         self.shopping_loading = False
 
     def _fetch_substitution(self, recipe_id: int):
+        self.substitution_detail_index = -1
         try:
             response = requests.get(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/substitution",
@@ -951,12 +1094,28 @@ class State(rx.State):
         else:
             self.substitution_error = f"조회 실패 ({response.status_code})"
 
+    @rx.var
+    def substitution_detail_item(self) -> dict | None:
+        if 0 <= self.substitution_detail_index < len(self.substitution_missing):
+            return self.substitution_missing[self.substitution_detail_index]
+        return None
+
+    @rx.event
+    def open_substitution_detail(self, index: int):
+        self.substitution_detail_index = index
+
+    @rx.event
+    def close_substitution_detail(self):
+        self.substitution_detail_index = -1
+
     @rx.event
     def back_to_recommendations(self):
         self.selected_recipe = None
         self.recipe_steps = []
         self.reviews_list = []
         self.review_summary = ""
+        self.review_photo_url = ""
+        self.review_photo_error = ""
         self.substitution_coverage = {}
         self.substitution_missing = []
 
@@ -1003,8 +1162,35 @@ class State(rx.State):
                 )
             else:
                 self.review_avg_rating = 0.0
+            # 목업: 후기 3개 이상 쌓이면 버튼 클릭 없이 AI 요약을 자동으로 보여준다
+            if self.review_count >= 3:
+                self._fetch_review_summary(recipe_id)
         else:
             self.review_error = f"조회 실패 ({response.status_code})"
+
+    @rx.event
+    async def handle_review_photo_upload(self, files: list[rx.UploadFile]):
+        """후기에 첨부할 사진 1장을 base64 데이터 URI로 인코딩해 image_url에 그대로 저장한다.
+        별도 파일 스토리지(S3 등)가 없어 택한 방식 - reviews.image_url은 TEXT라 데이터 URI를
+        그대로 담을 수 있고, rx.image(src=...)도 데이터 URI를 바로 렌더링한다."""
+        self.review_photo_error = ""
+        if not files:
+            return
+        self.review_photo_uploading = True
+        try:
+            import base64
+
+            data = await files[0].read()
+            b64 = base64.b64encode(data).decode("utf-8")
+            self.review_photo_url = f"data:image/jpeg;base64,{b64}"
+        except Exception as e:
+            self.review_photo_error = f"사진 업로드 실패: {e}"
+        self.review_photo_uploading = False
+
+    @rx.event
+    def clear_review_photo(self):
+        self.review_photo_url = ""
+        self.review_photo_error = ""
 
     @rx.event
     def submit_review(self):
@@ -1018,6 +1204,7 @@ class State(rx.State):
             "user_id": self.submitted_user_id,
             "rating": int(self.review_rating),
             "review_text": self.review_text_input.strip(),
+            "image_url": self.review_photo_url or None,
         }
         try:
             response = requests.post(f"{API_BASE}/reviews/{recipe_id}", json=payload, timeout=10)
@@ -1027,26 +1214,37 @@ class State(rx.State):
             return
         if response.status_code == 200:
             self.review_text_input = ""
+            self.review_photo_url = ""
             self._fetch_reviews(recipe_id)
         else:
             self.review_error = f"등록 실패 ({response.status_code})"
         self.submitting_review = False
 
-    @rx.event
-    def get_review_summary(self):
-        self.summarizing = True
-        recipe_id = self.selected_recipe["id"]
+    def _fetch_review_summary(self, recipe_id: int):
         try:
             response = requests.get(f"{API_BASE}/reviews/{recipe_id}/summary", timeout=30)
         except requests.RequestException as e:
             self.review_error = f"서버에 연결할 수 없습니다: {e}"
-            self.summarizing = False
             return
         if response.status_code == 200:
             self.review_summary = response.json()["summary"] or "아직 요약할 후기가 없습니다."
         else:
             self.review_error = f"요약 실패 ({response.status_code})"
+
+    @rx.event
+    def get_review_summary(self):
+        self.summarizing = True
+        recipe_id = self.selected_recipe["id"]
+        self._fetch_review_summary(recipe_id)
         self.summarizing = False
+
+    @rx.var
+    def review_summary_lines(self) -> list[str]:
+        """AI 요약을 불릿 줄 단위로 쪼갠다 - 프롬프트가 "• "로 시작하는 줄만 내놓도록
+        요청했지만, 혹시 빈 줄이 섞여 와도 안전하게 걸러낸다."""
+        if not self.review_summary:
+            return []
+        return [line.strip() for line in self.review_summary.split("\n") if line.strip()]
 
     def _fetch_favorites_list(self):
         self.loading_favorites = True
@@ -1413,13 +1611,6 @@ def pantry_item_row(item: dict) -> rx.Component:
             ),
             rx.spacer(),
             rx.button(
-                "안전확인",
-                size="1",
-                variant="soft",
-                loading=State.safety_checking,
-                on_click=lambda: State.check_safety(item["name"], item["expiry_date"]),
-            ),
-            rx.button(
                 "삭제",
                 size="1",
                 color_scheme="red",
@@ -1433,46 +1624,140 @@ def pantry_item_row(item: dict) -> rx.Component:
     )
 
 
-def safety_result_panel() -> rx.Component:
-    has_issue = (State.safety_expiry_status != "") | (State.safety_recall_matches.length() > 0)
-    return rx.cond(
-        State.safety_checked_name != "",
+def safety_overview_filter_chip(label: str, count) -> rx.Component:
+    return rx.button(
+        f"{label}({count})", size="1", radius="full",
+        variant=rx.cond(State.safety_overview_filter == label, "solid", "soft"),
+        color_scheme=rx.cond(State.safety_overview_filter == label, "grass", "gray"),
+        on_click=lambda: State.set_safety_overview_filter(label),
+    )
+
+
+def safety_overview_item_card(item: dict) -> rx.Component:
+    is_warning = item["status"] == "주의"
+    return rx.card(
         rx.vstack(
-            rx.divider(),
-            rx.heading("보유 재료 안전 정보", size="4"),
-            rx.card(
-                rx.vstack(
-                    rx.hstack(
-                        rx.text(State.safety_checked_name, weight="bold"),
-                        rx.spacer(),
-                        rx.cond(has_issue, rx.badge("주의", color_scheme="amber"), rx.badge("정상", color_scheme="green")),
-                        width="100%", align="center",
-                    ),
-                    rx.cond(
-                        State.safety_expiry_status != "",
-                        rx.text(f"유통기한 - {State.safety_expiry_status}", size="2", color="gray"),
-                        rx.text("유통기한 여유 있음", size="2", color="gray"),
-                    ),
-                    rx.cond(
-                        State.safety_recall_matches.length() > 0,
-                        rx.vstack(
-                            rx.text("회수·판매중지 이력이 있습니다:", color="red", weight="bold", size="2"),
-                            rx.foreach(
-                                State.safety_recall_matches,
-                                lambda m: rx.text(f"- {m['PRDTNM']}: {m['RTRVLPRVNS']}", size="2"),
-                            ),
-                            width="100%",
-                        ),
-                        rx.text("회수·판매중지 이력 없음", size="2", color="gray"),
-                    ),
-                    align="start", spacing="2", width="100%",
+            rx.hstack(
+                rx.text(item["name"], weight="bold"),
+                rx.spacer(),
+                rx.cond(
+                    is_warning,
+                    rx.badge("주의", color_scheme="amber"),
+                    rx.badge("정상", color_scheme="green"),
                 ),
-                width="100%",
-                variant="surface",
+                width="100%", align="center",
             ),
-            width="100%",
-            spacing="2",
+            rx.cond(
+                item["expiry_date"] != None,  # noqa: E711
+                rx.text(f"유통기한 {item['expiry_date']}", size="2", color="gray"),
+                rx.text("유통기한 미입력", size="2", color="gray"),
+            ),
+            rx.cond(
+                item["expiry_status"] != None,  # noqa: E711
+                rx.text(f"유통기한 {item['expiry_status']}. 빠른 섭취를 권장드려요.", size="2", color="amber"),
+            ),
+            rx.cond(
+                item["recall_summary"] != "",
+                rx.text(
+                    f"회수·판매중지 이력: {item['recall_summary']}",
+                    color="red", weight="bold", size="2",
+                ),
+            ),
+            align="start", spacing="1", width="100%",
         ),
+        width="100%", variant="surface",
+    )
+
+
+def safety_result_panel() -> rx.Component:
+    return rx.vstack(
+        rx.divider(),
+        rx.heading("보유 재료 안전 정보", size="4"),
+        rx.text(
+            "식품 회수·판매중지 및 유통기한 정보를 확인하세요.",
+            size="2", color="gray",
+        ),
+        rx.cond(
+            State.safety_overview_error != "",
+            rx.callout(State.safety_overview_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.safety_overview_fetched,
+            rx.vstack(
+                rx.hstack(
+                    safety_overview_filter_chip("전체", State.safety_overview_total),
+                    safety_overview_filter_chip("주의", State.safety_overview_warning),
+                    safety_overview_filter_chip("정상", State.safety_overview_normal),
+                    wrap="wrap", spacing="2", width="100%",
+                ),
+                rx.foreach(State.filtered_safety_items, safety_overview_item_card),
+                rx.text(
+                    "※ 회수/판매중지 정보는 식약처 데이터 기반으로 제공됩니다.",
+                    size="1", color="gray",
+                ),
+                width="100%", spacing="2",
+            ),
+            rx.button(
+                "보유 재료 안전 정보 확인", size="2", variant="soft", width="100%",
+                on_click=State.fetch_safety_overview,
+                loading=State.safety_overview_loading,
+            ),
+        ),
+        width="100%",
+        spacing="2",
+    )
+
+
+def recommendation_reason(item: dict) -> rx.Component:
+    return rx.text(
+        rx.cond(
+            item["has_protein_match"],
+            f"{item['nutrition_group']} 식단에 적합하고, 오늘 보유한 재료로 만들 수 있어요.",
+            rx.cond(
+                item["ingredient_overlap"],
+                "오늘 보유한 재료로 충분히 만들 수 있어요.",
+                "냉장고에 없는 재료가 많지만 참고해보세요.",
+            ),
+        ),
+        size="1", color="gray",
+    )
+
+
+def recommendation_nutrient_row(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.cond(
+            item["energy_kcal"] != None,  # noqa: E711
+            rx.vstack(
+                rx.text("열량", size="1", color="gray"),
+                rx.text(f"{item['energy_kcal']}kcal", size="2", weight="medium"),
+                spacing="0", align="center",
+            ),
+        ),
+        rx.cond(
+            item["protein_g"] != None,  # noqa: E711
+            rx.vstack(
+                rx.text("단백질", size="1", color="gray"),
+                rx.text(f"{item['protein_g']}g", size="2", weight="medium"),
+                spacing="0", align="center",
+            ),
+        ),
+        rx.cond(
+            item["fat_g"] != None,  # noqa: E711
+            rx.vstack(
+                rx.text("지방", size="1", color="gray"),
+                rx.text(f"{item['fat_g']}g", size="2", weight="medium"),
+                spacing="0", align="center",
+            ),
+        ),
+        rx.cond(
+            item["carbs_g"] != None,  # noqa: E711
+            rx.vstack(
+                rx.text("탄수화물", size="1", color="gray"),
+                rx.text(f"{item['carbs_g']}g", size="2", weight="medium"),
+                spacing="0", align="center",
+            ),
+        ),
+        width="100%", justify="between",
     )
 
 
@@ -1495,6 +1780,8 @@ def recommendation_card(item: dict) -> rx.Component:
                 width="100%",
                 align="center",
             ),
+            recommendation_reason(item),
+            recommendation_nutrient_row(item),
             rx.hstack(
                 rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
                 rx.spacer(),
@@ -1508,6 +1795,16 @@ def recommendation_card(item: dict) -> rx.Component:
         ),
         width="100%",
         variant="classic",
+    )
+
+
+def recommend_filter_chip(label: str) -> rx.Component:
+    return rx.button(
+        label, size="1",
+        variant=rx.cond(State.recommend_filter == label, "solid", "soft"),
+        color_scheme=rx.cond(State.recommend_filter == label, "grass", "gray"),
+        radius="full",
+        on_click=lambda: State.set_recommend_filter(label),
     )
 
 
@@ -1529,13 +1826,29 @@ def recommendation_section() -> rx.Component:
         rx.cond(
             State.recommendations.length() > 0,
             rx.vstack(
-                rx.foreach(State.recommendations, recommendation_card),
+                rx.hstack(
+                    recommend_filter_chip("전체"),
+                    recommend_filter_chip("고단백"),
+                    recommend_filter_chip("균형"),
+                    recommend_filter_chip("고탄수화물"),
+                    recommend_filter_chip("고지방"),
+                    wrap="wrap", spacing="2", width="100%",
+                ),
+                rx.foreach(State.filtered_recommendations, recommendation_card),
                 width="100%",
                 spacing="3",
             ),
         ),
         width="100%",
         spacing="4",
+    )
+
+
+def recipe_ingredient_row(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.icon("dot", size=14, color=rx.color("grass", 9)),
+        rx.text(item["display"], size="2"),
+        width="100%", align="center", spacing="2",
     )
 
 
@@ -1557,6 +1870,11 @@ def review_row(r: dict) -> rx.Component:
                     rx.badge(f"★ {r['rating']}/5", color_scheme="amber"),
                 ),
                 rx.text(r["review_text"], size="2"),
+                rx.cond(
+                    r["image_url"],
+                    rx.image(src=r["image_url"], width="120px", height="120px",
+                              radius="md", object_fit="cover"),
+                ),
                 spacing="1", align="start",
             ),
             width="100%", align="start",
@@ -1585,20 +1903,29 @@ def review_section() -> rx.Component:
             rx.vstack(rx.foreach(State.reviews_list, review_row), width="100%", spacing="2"),
             rx.text("아직 후기가 없습니다.", color="gray", size="2"),
         ),
-        rx.button(
-            "AI 후기 요약 보기",
-            size="2",
-            variant="soft",
-            loading=State.summarizing,
-            on_click=State.get_review_summary,
+        rx.cond(
+            State.review_summary == "",
+            rx.button(
+                "AI 후기 요약 보기",
+                size="2",
+                variant="soft",
+                loading=State.summarizing,
+                on_click=State.get_review_summary,
+            ),
         ),
         rx.cond(
             State.review_summary != "",
             rx.card(
                 rx.vstack(
                     rx.text("AI 요약", weight="bold", size="2", color=rx.color("blue", 11)),
-                    rx.text(State.review_summary, size="2"),
-                    align="start", spacing="1",
+                    rx.vstack(
+                        rx.foreach(
+                            State.review_summary_lines,
+                            lambda line: rx.text(line, size="2"),
+                        ),
+                        align="start", spacing="1",
+                    ),
+                    align="start", spacing="2",
                 ),
                 width="100%", variant="surface",
             ),
@@ -1618,6 +1945,42 @@ def review_section() -> rx.Component:
             ),
             width="100%",
         ),
+        rx.cond(
+            State.review_photo_url != "",
+            rx.hstack(
+                rx.image(src=State.review_photo_url, width="60px", height="60px",
+                         radius="md", object_fit="cover"),
+                rx.icon_button(
+                    rx.icon("x", size=14),
+                    on_click=State.clear_review_photo,
+                    size="1", variant="soft", color_scheme="gray",
+                ),
+                align="center", spacing="2",
+            ),
+            rx.upload(
+                rx.hstack(
+                    rx.icon("camera", size=16),
+                    rx.text("사진 첨부 (선택)", size="2"),
+                    align="center", spacing="2",
+                ),
+                id="review_photo_upload",
+                accept={"image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"]},
+                max_files=1,
+                on_drop=State.handle_review_photo_upload(
+                    rx.upload_files(upload_id="review_photo_upload")
+                ),
+                border="1px dashed", border_color=rx.color("gray", 6),
+                padding="2", border_radius="8px", width="100%",
+            ),
+        ),
+        rx.cond(
+            State.review_photo_uploading,
+            rx.spinner(size="1"),
+        ),
+        rx.cond(
+            State.review_photo_error != "",
+            rx.callout(State.review_photo_error, color_scheme="red", width="100%", size="1"),
+        ),
         rx.button(
             "후기 등록",
             on_click=State.submit_review,
@@ -1629,7 +1992,7 @@ def review_section() -> rx.Component:
     )
 
 
-def missing_ingredient_row(m: dict) -> rx.Component:
+def missing_ingredient_row(m: dict, index: int) -> rx.Component:
     color = rx.cond(
         m["type"] == "omit",
         "gray",
@@ -1643,6 +2006,40 @@ def missing_ingredient_row(m: dict) -> rx.Component:
         ),
         width="100%",
         variant="surface",
+        cursor="pointer",
+        on_click=lambda: State.open_substitution_detail(index),
+    )
+
+
+def substitution_detail_panel() -> rx.Component:
+    item = State.substitution_detail_item
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.text(f"{item['ingredient']}이(가) 없어요", size="5", weight="bold"),
+                rx.text("🙁", size="5"),
+                spacing="2", align="center",
+            ),
+            rx.text("다음 재료로 대체하거나 생략할 수 있어요.", size="2", color="gray"),
+            rx.card(
+                rx.vstack(
+                    rx.badge(
+                        rx.cond(item["type"] == "omit", "생략 가능", "대체 재료 추천"),
+                        color_scheme=rx.cond(item["type"] == "omit", "gray", "grass"),
+                    ),
+                    rx.text(item["suggestion"], size="2"),
+                    align="start", spacing="2", width="100%",
+                ),
+                width="100%", variant="surface",
+            ),
+            rx.callout(
+                "🙋 " + "재료가 없어도 대체·생략 팁을 참고하면 충분히 맛있게 만들 수 있어요!",
+                color_scheme="grass", width="100%", size="1",
+            ),
+            rx.button("적용하기", size="3", width="100%", on_click=State.close_substitution_detail),
+            spacing="3", width="100%",
+        ),
+        width="100%", variant="surface",
     )
 
 
@@ -1656,14 +2053,18 @@ def substitution_section() -> rx.Component:
                 rx.callout(State.substitution_error, color_scheme="red", width="100%"),
             ),
             rx.cond(
-                State.substitution_missing.length() > 0,
-                rx.vstack(
-                    rx.text("부족한 재료 / 대체·생략 안내", size="2", weight="bold", color="gray"),
-                    rx.foreach(State.substitution_missing, missing_ingredient_row),
-                    width="100%",
-                    spacing="2",
+                State.substitution_detail_item,
+                substitution_detail_panel(),
+                rx.cond(
+                    State.substitution_missing.length() > 0,
+                    rx.vstack(
+                        rx.text("부족한 재료 / 대체·생략 안내 (눌러서 자세히 보기)", size="2", weight="bold", color="gray"),
+                        rx.foreach(State.substitution_missing, missing_ingredient_row),
+                        width="100%",
+                        spacing="2",
+                    ),
+                    rx.text("필요한 재료를 전부 보유하고 있습니다!", color="grass", size="2"),
                 ),
-                rx.text("필요한 재료를 전부 보유하고 있습니다!", color="grass", size="2"),
             ),
             width="100%",
             spacing="2",
@@ -1680,31 +2081,63 @@ def price_included_row(item: dict) -> rx.Component:
     )
 
 
-def price_section() -> rx.Component:
-    tier_color = rx.cond(
-        State.price_tier == "프리미엄", "red",
-        rx.cond(State.price_tier == "가성비", "green", "gray"),
+def price_tier_card(label: str, count, color: str) -> rx.Component:
+    """3단 비교 카드 한 칸. count는 State.price_*_count 계산 var를 그대로 받는다.
+    이 레시피의 실제 등급(State.price_tier)과 일치하는 칸만 강조 테두리+배지로 표시한다."""
+    is_current = State.price_tier == label
+    return rx.card(
+        rx.vstack(
+            rx.text(label, weight="bold", size="2"),
+            rx.text(f"{count}개 재료", size="1", color="gray"),
+            rx.cond(
+                is_current,
+                rx.badge("이 레시피", color_scheme=color, size="1"),
+            ),
+            align="center", spacing="1", width="100%",
+        ),
+        variant=rx.cond(is_current, "surface", "ghost"),
+        border=rx.cond(is_current, "2px solid", "1px solid"),
+        border_color=rx.cond(is_current, rx.color(color, 8), rx.color("gray", 5)),
+        width="100%",
     )
+
+
+def price_section() -> rx.Component:
     return rx.vstack(
         rx.divider(),
         rx.heading("가격대별 등급", size="4"),
         rx.cond(
             State.price_fetched,
-            rx.card(
-                rx.vstack(
-                    rx.badge(f"{State.price_tier}형", color_scheme=tier_color, size="2"),
-                    rx.heading(f"약 {State.price_total_cost}원", size="6"),
-                    rx.text("1인분 기준 · 포함된 재료만의 부분 합계", size="1", color="gray"),
-                    rx.cond(
-                        State.price_included.length() > 0,
-                        rx.vstack(
-                            rx.foreach(State.price_included, price_included_row),
-                            width="100%", spacing="1", padding_top="2",
-                        ),
-                    ),
-                    align="start", spacing="2", width="100%",
+            rx.vstack(
+                rx.hstack(
+                    price_tier_card("가성비", State.price_cheap_count, "green"),
+                    price_tier_card("기본", State.price_normal_count, "gray"),
+                    price_tier_card("프리미엄", State.price_expensive_count, "red"),
+                    width="100%", spacing="2",
                 ),
-                width="100%", variant="surface",
+                rx.cond(
+                    State.price_tier == "정보부족",
+                    rx.text(
+                        "비교 가능한 재료가 부족해 등급을 매기지 못했습니다 (참고용).",
+                        size="1", color="gray",
+                    ),
+                ),
+                rx.card(
+                    rx.vstack(
+                        rx.heading(f"약 {State.price_total_cost}원", size="6"),
+                        rx.text("1인분 기준 · 포함된 재료만의 부분 합계", size="1", color="gray"),
+                        rx.cond(
+                            State.price_included.length() > 0,
+                            rx.vstack(
+                                rx.foreach(State.price_included, price_included_row),
+                                width="100%", spacing="1", padding_top="2",
+                            ),
+                        ),
+                        align="start", spacing="2", width="100%",
+                    ),
+                    width="100%", variant="surface",
+                ),
+                width="100%", spacing="3",
             ),
             rx.button(
                 "예상 재료비 확인", size="2", variant="soft",
@@ -1933,8 +2366,23 @@ def recipe_detail_view() -> rx.Component:
                 width="100%", padding_top="3",
             )),
             rx.vstack(
+                rx.cond(
+                    State.recipe_ingredients_list.length() > 0,
+                    rx.vstack(
+                        rx.heading("재료 (가구원 수 기준)", size="4"),
+                        rx.vstack(
+                            rx.foreach(State.recipe_ingredients_list, recipe_ingredient_row),
+                            width="100%", spacing="1",
+                        ),
+                        width="100%", spacing="2",
+                    ),
+                ),
                 rx.heading("조리 단계", size="4"),
                 rx.vstack(rx.foreach(State.recipe_steps, recipe_step_row), width="100%", spacing="1"),
+                rx.button(
+                    "이 레시피로 선택하기", size="3", width="100%",
+                    on_click=lambda: State.set_recipe_detail_tab("ingredients"),
+                ),
                 width="100%", spacing="3", padding_top="3",
             ),
         ),
@@ -2496,6 +2944,68 @@ def category_ingredient_grid() -> rx.Component:
     )
 
 
+def pantry_photo_ingredient_chip(name: str) -> rx.Component:
+    return rx.badge(
+        name,
+        color_scheme=rx.cond(State.pantry_photo_selected.contains(name), "grass", "gray"),
+        variant=rx.cond(State.pantry_photo_selected.contains(name), "solid", "soft"),
+        size="2",
+        cursor="pointer",
+        on_click=lambda: State.toggle_pantry_photo_ingredient(name),
+    )
+
+
+def pantry_photo_upload_section() -> rx.Component:
+    return rx.vstack(
+        rx.cond(
+            State.pantry_photo_detected.length() == 0,
+            rx.upload(
+                rx.vstack(
+                    rx.icon("camera", size=28, color=rx.color("grass", 9)),
+                    rx.text("냉장고 사진을 올리면 AI가 재료를 찾아드려요", size="2", color="gray"),
+                    rx.text("클릭하거나 파일을 끌어다 놓으세요", size="1", color="gray"),
+                    align="center", spacing="2", padding="4",
+                ),
+                id="pantry_photo_upload",
+                accept={"image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"]},
+                max_files=1,
+                border=f"2px dashed {rx.color('grass', 7)}",
+                border_radius="12px",
+                width="100%",
+                on_drop=State.handle_pantry_photo_upload(
+                    rx.upload_files(upload_id="pantry_photo_upload")
+                ),
+            ),
+        ),
+        rx.cond(
+            State.pantry_photo_uploading,
+            rx.hstack(rx.spinner(size="2"), rx.text("사진에서 재료를 인식하는 중...", size="2"), align="center"),
+        ),
+        rx.cond(
+            State.pantry_photo_error != "",
+            rx.callout(State.pantry_photo_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.pantry_photo_detected.length() > 0,
+            rx.vstack(
+                rx.text("인식된 재료 - 추가할 것을 선택하세요", size="2", weight="bold", color="gray"),
+                rx.hstack(
+                    rx.foreach(State.pantry_photo_detected, pantry_photo_ingredient_chip),
+                    wrap="wrap", spacing="2",
+                ),
+                rx.button(
+                    f"선택한 재료 추가하기 ({State.pantry_photo_selected.length()}개)",
+                    on_click=State.confirm_pantry_photo_ingredients,
+                    width="100%", size="3",
+                    disabled=State.pantry_photo_selected.length() == 0,
+                ),
+                width="100%", spacing="3",
+            ),
+        ),
+        width="100%", spacing="3",
+    )
+
+
 def pantry_input_section() -> rx.Component:
     return rx.vstack(
         rx.hstack(
@@ -2509,11 +3019,17 @@ def pantry_input_section() -> rx.Component:
                 variant=rx.cond(State.pantry_input_mode == "direct", "solid", "soft"),
                 on_click=lambda: State.set_pantry_input_mode("direct"),
             ),
+            rx.button(
+                "사진 업로드", size="2",
+                variant=rx.cond(State.pantry_input_mode == "photo", "solid", "soft"),
+                on_click=lambda: State.set_pantry_input_mode("photo"),
+            ),
             width="100%",
         ),
-        rx.cond(
-            State.pantry_input_mode == "category",
-            category_ingredient_grid(),
+        rx.match(
+            State.pantry_input_mode,
+            ("category", category_ingredient_grid()),
+            ("photo", pantry_photo_upload_section()),
             rx.hstack(
                 rx.input(
                     placeholder="재료 이름 (예: 두부)",
@@ -2567,10 +3083,6 @@ def fridge_view() -> rx.Component:
         catalog_search_section(),
         favorite_ingredients_section(),
         ingredient_submission_section(),
-        rx.cond(
-            State.safety_error != "",
-            rx.callout(State.safety_error, color_scheme="red", width="100%"),
-        ),
         safety_result_panel(),
         spacing="4",
         width="100%",

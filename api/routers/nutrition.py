@@ -55,6 +55,13 @@ class NutritionFitResponse(BaseModel):
     condition_notes: list[str]
 
 
+class IngredientDisplayItem(BaseModel):
+    name: str
+    display: str
+    amount: float | None
+    unit: str | None
+
+
 def _build_recipe_micro(cur: sqlite3.Cursor, recipe_id: int, household_size: int) -> tuple[dict, bool]:
     base_servings, items = portion_agent.get_recipe_ingredients(cur, recipe_id)
     if not items:
@@ -126,3 +133,20 @@ def get_nutrition_fit(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depend
         medical_conditions_text=profile.get("medical_conditions") or "",
     )
     return result
+
+
+@router.get("/{recipe_id}/ingredients", response_model=list[IngredientDisplayItem])
+def get_recipe_ingredients_scaled(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+    """가구원 수에 맞춰 환산된 재료 수량 목록. portion_agent.py 로직 그대로 재사용한다."""
+    profile = recommendation_agent.get_user_profile(cur, user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")
+    try:
+        household_size = int(profile.get("household_size") or 1)
+    except (TypeError, ValueError):
+        household_size = 1
+
+    base_servings, items = portion_agent.get_recipe_ingredients(cur, recipe_id)
+    if not items:
+        return []
+    return portion_agent.scale_ingredients(items, base_servings, household_size)

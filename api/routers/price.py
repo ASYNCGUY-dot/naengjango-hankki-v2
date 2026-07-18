@@ -2,10 +2,17 @@
 V1의 price_agent.py 로직을 HTTP 엔드포인트로 감싸는 얇은 래퍼.
 KAMIS 도매가격을 가져와 레시피의 가격 등급(estimate_recipe_price_tier)과
 재료비 추정(estimate_recipe_total_cost)을 그대로 노출한다.
+
+2026-07-18 3단 비교 카드 UI 검증 중 발견: KAMIS 공공 API가 가끔 부류 하나에 대해
+정상 dict 대신 list를 내려줘서(추정: 순간적인 요청 제한/오류 응답), price_agent.py의
+fetch_category_prices()가 그 shape을 가정하고 .get()을 호출하다 AttributeError로 죽는다.
+safety.py에서 식약처 API 무응답을 503으로 감싼 것과 같은 원칙 - agent 파일은 그대로 두고
+이 라우터 계층에서만 예외를 잡아 "일시적으로 응답하지 않음" 503으로 바꾼다.
 """
 
 import sqlite3
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
@@ -68,7 +75,13 @@ def get_recipe_price(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends
     scaled_items = portion_agent.scale_ingredients(items, base_servings, household_size)
     ingredient_names = [item["name"] for item in items]
 
-    all_items = price_agent.get_all_prices()
+    try:
+        all_items = price_agent.get_all_prices()
+    except (requests.RequestException, AttributeError, ValueError, TypeError):
+        raise HTTPException(
+            status_code=503,
+            detail="KAMIS 가격 정보 서비스가 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해주세요.",
+        )
     tier_result = price_agent.estimate_recipe_price_tier(ingredient_names, all_items)
     cost_result = price_agent.estimate_recipe_total_cost(scaled_items, all_items)
 

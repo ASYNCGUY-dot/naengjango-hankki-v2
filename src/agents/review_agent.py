@@ -15,10 +15,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DB_PATH = "data/app.db"
 
 
-def save_review(cur, recipe_id: int, user_id: int, rating: int, review_text: str):
+def save_review(cur, recipe_id: int, user_id: int, rating: int, review_text: str, image_url: str | None = None):
+    """image_url(선택)은 2026-07-18 목업 대비 재검토에서 추가한 사진 첨부 기능용 -
+    기존 호출부(image_url 없이 호출)는 그대로 동작한다."""
     cur.execute(
-        "INSERT INTO reviews (recipe_id, user_id, rating, review_text, created_at) VALUES (?, ?, ?, ?, ?)",
-        (recipe_id, user_id, rating, review_text, datetime.now().isoformat())
+        "INSERT INTO reviews (recipe_id, user_id, rating, review_text, created_at, image_url) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (recipe_id, user_id, rating, review_text, datetime.now().isoformat(), image_url)
     )
 
 
@@ -29,7 +32,7 @@ def get_reviews_for_recipe(cur, recipe_id: int) -> list[dict]:
     """
     cur.execute(
         """
-        SELECT r.rating, r.review_text, r.created_at, u.username
+        SELECT r.rating, r.review_text, r.created_at, u.username, r.image_url
         FROM reviews r
         LEFT JOIN users u ON u.id = r.user_id
         WHERE r.recipe_id = ?
@@ -39,7 +42,7 @@ def get_reviews_for_recipe(cur, recipe_id: int) -> list[dict]:
     )
     rows = cur.fetchall()
     return [
-        {"rating": r[0], "review_text": r[1], "created_at": r[2], "username": r[3] or "익명"}
+        {"rating": r[0], "review_text": r[1], "created_at": r[2], "username": r[3] or "익명", "image_url": r[4]}
         for r in rows
     ]
 
@@ -92,7 +95,8 @@ def summarize_reviews(cur, recipe_id: int) -> str | None:
         f"- 별점 {r['rating']}/5: {r['review_text']}" for r in reviews
     )
     prompt = f"""아래는 한 레시피에 달린 사용자 후기 목록입니다. 공통적으로 나오는 의견을
-2~3문장으로 요약해주세요 (좋은 점과 아쉬운 점이 있다면 균형있게 언급해주세요).
+2~3개의 불릿 포인트로 요약해주세요. 각 줄은 "• "로 시작하고, 좋은 점과 아쉬운 점이 있다면
+균형있게 나눠서 각각 한 줄로 적어주세요. 다른 설명 없이 불릿 목록만 출력하세요.
 
 {reviews_text}
 """
