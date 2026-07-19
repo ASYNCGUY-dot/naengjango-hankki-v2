@@ -52,6 +52,7 @@ class State(rx.State):
     submitted_user_id: int | None = None
     profile_complete: bool = False
     auth_token: str = ""
+    profile_edit_mode: bool = False
 
     auth_mode: str = "login"
     auth_username: str = ""
@@ -432,6 +433,19 @@ class State(rx.State):
         else:
             self.error_message = f"저장 실패 ({response.status_code}): {response.text}"
         self.is_submitting = False
+
+    @rx.event
+    def toggle_profile_edit(self):
+        self.profile_edit_mode = not self.profile_edit_mode
+        self.error_message = ""
+
+    @rx.event
+    def save_profile_edits(self):
+        """홈 화면 프로필 카드의 저장 버튼. 온보딩과 같은 submit_profile 로직을 그대로
+        재사용하고, 성공했을 때만 수정 모드를 닫는다."""
+        self.submit_profile()
+        if not self.error_message:
+            self.profile_edit_mode = False
 
     def _fetch_seasonal(self):
         try:
@@ -945,6 +959,8 @@ class State(rx.State):
         self.selected_recipe = None
         if tab == "community":
             self._fetch_favorites_list()
+        elif tab == "home":
+            # 인기 레시피 영상 섹션이 홈으로 옮겨왔다 - 로그인 직후 이미 받아왔으면 재요청하지 않는다.
             if not self.popular_categories:
                 self._fetch_popular_categories()
         elif tab == "fridge":
@@ -3124,11 +3140,104 @@ def pantry_input_section() -> rx.Component:
     )
 
 
+def profile_summary_row(label: str, value) -> rx.Component:
+    return rx.hstack(
+        rx.text(label, size="2", color="gray", width="88px", flex_shrink="0"),
+        rx.text(value, size="2"),
+        width="100%", align="start",
+    )
+
+
+def home_profile_section() -> rx.Component:
+    """홈 화면의 내 프로필 카드. 평소에는 요약을 보여주고, 수정을 누르면 온보딩과 같은
+    필드 전체(유저 정보·알레르기·영양제·병력 포함)를 한 화면 폼으로 펼쳐 저장한다."""
+    summary = rx.vstack(
+        rx.hstack(
+            rx.heading("내 프로필", size="4"),
+            rx.spacer(),
+            rx.button("수정", size="1", variant="soft", on_click=State.toggle_profile_edit),
+            width="100%", align="center",
+        ),
+        profile_summary_row("기본 정보", f"{State.gender} · {State.age_group} · {State.household_size}인 가구"),
+        profile_summary_row("건강 목표", rx.cond(State.health_goal != "", State.health_goal, "미입력")),
+        profile_summary_row("요리 수준", State.cooking_level),
+        rx.hstack(
+            rx.text("알레르기", size="2", color="gray", width="88px", flex_shrink="0"),
+            rx.cond(
+                State.allergy_items.length() > 0,
+                rx.hstack(
+                    rx.foreach(State.allergy_items, lambda a: rx.badge(a, color_scheme="red", variant="soft")),
+                    wrap="wrap",
+                ),
+                rx.text("없음", size="2"),
+            ),
+            width="100%", align="start",
+        ),
+        rx.hstack(
+            rx.text("영양제", size="2", color="gray", width="88px", flex_shrink="0"),
+            rx.cond(
+                State.supplement_items.length() > 0,
+                rx.hstack(
+                    rx.foreach(State.supplement_items, lambda s: rx.badge(s, color_scheme="blue", variant="soft")),
+                    wrap="wrap",
+                ),
+                rx.text("없음", size="2"),
+            ),
+            width="100%", align="start",
+        ),
+        profile_summary_row("병력 정보", rx.cond(State.medical_conditions != "", State.medical_conditions, "없음")),
+        align="start", spacing="2", width="100%",
+    )
+
+    edit_form = rx.vstack(
+        rx.hstack(
+            rx.heading("프로필 수정", size="4"),
+            rx.spacer(),
+            rx.button("취소", size="1", variant="soft", color_scheme="gray", on_click=State.toggle_profile_edit),
+            width="100%", align="center",
+        ),
+        labeled_select("성별", "gender", GENDER_OPTIONS),
+        labeled_input("연령대", "age_group", "예: 20대"),
+        chip_input(
+            "알레르기 (선택)", State.allergy_items, "allergy_chip_input", State.allergy_chip_input,
+            State.add_allergy_chip, State.remove_allergy_chip, "예: 새우, 땅콩",
+        ),
+        chip_input(
+            "복용 중인 영양제 (선택)", State.supplement_items, "supplement_chip_input",
+            State.supplement_chip_input, State.add_supplement_chip, State.remove_supplement_chip,
+            "예: 종합비타민",
+        ),
+        labeled_input("건강 목표", "health_goal", "예: 체중감량"),
+        labeled_input("이용 목적", "purpose", "예: 자취생 식단관리"),
+        labeled_select("요리 수준", "cooking_level", COOKING_LEVEL_OPTIONS),
+        labeled_input("가구 인원", "household_size", "숫자로 입력"),
+        labeled_select("메뉴 선호", "novelty_pref", NOVELTY_OPTIONS),
+        labeled_input("보유 조리도구 (콤마로 구분)", "cooking_tools", "예: 가스레인지,전자레인지"),
+        labeled_input("병력 정보 (선택)", "medical_conditions", "없으면 비워두세요"),
+        rx.cond(
+            State.error_message != "",
+            rx.callout(State.error_message, color_scheme="red", width="100%"),
+        ),
+        rx.button(
+            "저장", on_click=State.save_profile_edits, loading=State.is_submitting,
+            width="100%",
+        ),
+        align="start", spacing="3", width="100%",
+    )
+
+    return rx.card(
+        rx.cond(State.profile_edit_mode, edit_form, summary),
+        width="100%", variant="surface",
+    )
+
+
 def home_view() -> rx.Component:
     return rx.vstack(
         rx.heading("안녕하세요!", size="6"),
         rx.text("오늘 뭐 먹을지 고민되시나요? 냉장고 속 재료로 추천해드릴게요.", size="2", color="gray"),
+        home_profile_section(),
         seasonal_section(),
+        popular_videos_section(),
         spacing="4",
         width="100%",
         max_width="480px",
@@ -3172,9 +3281,9 @@ def recommend_view() -> rx.Component:
 
 
 def community_view() -> rx.Component:
+    # 인기 레시피 영상은 홈 화면으로 이동했다(2026-07-19 사용자 요청) - 여기는 즐겨찾기만 남긴다.
     return rx.vstack(
         favorites_list_view(),
-        popular_videos_section(),
         spacing="4",
         width="100%",
         max_width="480px",
