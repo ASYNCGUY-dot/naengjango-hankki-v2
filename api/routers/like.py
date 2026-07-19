@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import like_agent
 
@@ -21,7 +22,13 @@ class LikeStatus(BaseModel):
 
 
 @router.get("/{recipe_id}/like", response_model=LikeStatus)
-def get_like_status(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def get_like_status(
+    recipe_id: int,
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
     if cur.fetchone() is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")
@@ -32,7 +39,13 @@ def get_like_status(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends(
 
 
 @router.post("/{recipe_id}/like/toggle", response_model=LikeStatus)
-def toggle_like(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def toggle_like(
+    recipe_id: int,
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
     if cur.fetchone() is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")

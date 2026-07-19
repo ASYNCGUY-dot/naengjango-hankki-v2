@@ -26,22 +26,25 @@ PROFILE_PAYLOAD = {
 RECIPE_ID = 1  # seed.sql에 미리 넣어둔 "두부조림"
 
 
-def _signup_with_pantry(client, username: str, pantry_names: list[str]) -> int:
-    user_id = client.post("/auth/signup", json={"username": username, "password": "pw123456"}).json()["user_id"]
-    client.put(f"/profile/{user_id}", json=PROFILE_PAYLOAD)
+def _signup_with_pantry(client, username: str, pantry_names: list[str]) -> tuple[int, dict]:
+    data = client.post("/auth/signup", json={"username": username, "password": "pw123456"}).json()
+    user_id = data["user_id"]
+    headers = {"Authorization": f"Bearer {data['token']}"}
+    client.put(f"/profile/{user_id}", json=PROFILE_PAYLOAD, headers=headers)
     for name in pantry_names:
-        client.post(f"/pantry/{user_id}", json={"name": name, "expiry_date": None})
-    return user_id
+        client.post(f"/pantry/{user_id}", json={"name": name, "expiry_date": None}, headers=headers)
+    return user_id, headers
 
 
-def test_recommend_nonexistent_user_returns_404(client):
+def test_recommend_without_token_returns_401(client):
+    # 토큰 인가(#63): user_id만 알아서는 남의 추천(프로필 기반 데이터)을 볼 수 없다
     res = client.get("/recommendation/999999999")
-    assert res.status_code == 404
+    assert res.status_code == 401
 
 
 def test_recommend_with_matching_pantry_returns_qualified_recipe_with_nutrients(client):
-    user_id = _signup_with_pantry(client, "u_reco_1", ["두부"])
-    res = client.get(f"/recommendation/{user_id}", params={"limit": 10})
+    user_id, headers = _signup_with_pantry(client, "u_reco_1", ["두부"])
+    res = client.get(f"/recommendation/{user_id}", params={"limit": 10}, headers=headers)
     assert res.status_code == 200
     items = res.json()
     assert len(items) >= 1
@@ -60,8 +63,8 @@ def test_recommend_with_matching_pantry_returns_qualified_recipe_with_nutrients(
 def test_recommend_without_matching_pantry_recipe_not_qualified_but_still_listed(client):
     # 두부/양파와 전혀 무관한 재료만 보유하면, coverage_ratio가 문턱(0.2) 밑이라 자격을
     # 얻지 못한다 - 다만 알레르기에 걸리지 않는 한 후보 목록 자체에서 빠지지는 않는다.
-    user_id = _signup_with_pantry(client, "u_reco_2", ["오이"])
-    res = client.get(f"/recommendation/{user_id}")
+    user_id, headers = _signup_with_pantry(client, "u_reco_2", ["오이"])
+    res = client.get(f"/recommendation/{user_id}", headers=headers)
     assert res.status_code == 200
     item = next(i for i in res.json() if i["id"] == RECIPE_ID)
     assert item["qualifies"] is False
@@ -82,8 +85,11 @@ def test_get_recipe_detail_nonexistent_returns_404(client):
 
 def test_recipe_ingredients_scaled_to_household_size(client):
     # base_servings=2, household_size=2 -> 배율 1이라 원본 수량 그대로 나와야 한다.
-    user_id = _signup_with_pantry(client, "u_reco_3", [])
-    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/ingredients", params={"user_id": user_id})
+    user_id, headers = _signup_with_pantry(client, "u_reco_3", [])
+    res = client.get(
+        f"/recommendation/recipes/{RECIPE_ID}/ingredients",
+        params={"user_id": user_id}, headers=headers,
+    )
     assert res.status_code == 200
     items = res.json()
     by_name = {i["name"]: i for i in items}
@@ -92,6 +98,10 @@ def test_recipe_ingredients_scaled_to_household_size(client):
     assert by_name["양파"]["amount"] == 50
 
 
-def test_recipe_ingredients_nonexistent_user_returns_404(client):
-    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/ingredients", params={"user_id": 999999999})
-    assert res.status_code == 404
+def test_recipe_ingredients_other_user_returns_403(client):
+    _, headers = _signup_with_pantry(client, "u_reco_4", [])
+    res = client.get(
+        f"/recommendation/recipes/{RECIPE_ID}/ingredients",
+        params={"user_id": 999999999}, headers=headers,
+    )
+    assert res.status_code == 403

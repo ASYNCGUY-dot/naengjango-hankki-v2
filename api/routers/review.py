@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel, Field
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import review_agent
 
@@ -48,7 +49,13 @@ def list_reviews(recipe_id: int, cur: sqlite3.Cursor = Depends(get_db)):
 
 
 @router.post("/{recipe_id}")
-def create_review(recipe_id: int, body: ReviewRequest, cur: sqlite3.Cursor = Depends(get_db)):
+def create_review(
+    recipe_id: int,
+    body: ReviewRequest,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(body.user_id, current_user_id)
     _require_recipe(cur, recipe_id)
     cur.execute("SELECT id FROM users WHERE id = ?", (body.user_id,))
     if cur.fetchone() is None:

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import ingredient_submission_agent
 
@@ -65,13 +66,24 @@ def _official_match_exists(cur: sqlite3.Cursor, ingredient_name: str) -> bool:
 
 
 @router.get("", response_model=list[MySubmissionItem])
-def list_my_submissions(user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def list_my_submissions(
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     _require_user(cur, user_id)
     return ingredient_submission_agent.get_my_ingredient_submissions(cur, user_id)
 
 
 @router.post("", response_model=SubmissionResponse)
-def submit_ingredient(user_id: int, body: SubmissionRequest, cur: sqlite3.Cursor = Depends(get_db)):
+def submit_ingredient(
+    user_id: int,
+    body: SubmissionRequest,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     _require_user(cur, user_id)
     official_match = _official_match_exists(cur, body.ingredient_name)
     status = ingredient_submission_agent.submit_ingredient_info(
@@ -82,7 +94,13 @@ def submit_ingredient(user_id: int, body: SubmissionRequest, cur: sqlite3.Cursor
 
 
 @router.get("/{submission_id}", response_model=MySubmissionDetail)
-def get_submission_detail(submission_id: int, user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def get_submission_detail(
+    submission_id: int,
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     _require_user(cur, user_id)
     detail = ingredient_submission_agent.get_ingredient_submission_detail(cur, submission_id, user_id)
     if detail is None:
@@ -91,7 +109,14 @@ def get_submission_detail(submission_id: int, user_id: int, cur: sqlite3.Cursor 
 
 
 @router.put("/{submission_id}", response_model=SubmissionResponse)
-def update_submission(submission_id: int, user_id: int, body: SubmissionRequest, cur: sqlite3.Cursor = Depends(get_db)):
+def update_submission(
+    submission_id: int,
+    user_id: int,
+    body: SubmissionRequest,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     _require_user(cur, user_id)
     status = ingredient_submission_agent.update_ingredient_submission(
         cur, submission_id, user_id, body.ingredient_name, body.calorie, body.carbs_g,

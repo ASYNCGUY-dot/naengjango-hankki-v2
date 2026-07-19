@@ -33,41 +33,44 @@ def _reset_prices_cache():
     yield
 
 
-def _signup(client, username: str) -> int:
-    return client.post("/auth/signup", json={"username": username, "password": "pw123456"}).json()["user_id"]
+def _signup(client, username: str) -> tuple[int, dict]:
+    res = client.post("/auth/signup", json={"username": username, "password": "pw123456"})
+    data = res.json()
+    return data["user_id"], {"Authorization": f"Bearer {data['token']}"}
 
 
-def _signup_with_household_size_2(client, username: str) -> int:
+def _signup_with_household_size_2(client, username: str) -> tuple[int, dict]:
     # base_servings=2인 시드 레시피와 배율을 1로 맞춰서(household_size/base_servings=1),
     # 환산 없이 원본 수량(두부 200g)이 그대로 나오게 한다 - 프로필을 안 채우면
     # household_size가 기본값 1로 떨어져 배율이 0.5가 되므로, 원가 계산 테스트에서는
     # 명시적으로 채워야 한다.
-    user_id = _signup(client, username)
+    user_id, headers = _signup(client, username)
     client.put(f"/profile/{user_id}", json={
         "gender": "여성", "age_group": "30대", "allergy": "", "health_goal": "체중감량",
         "purpose": "테스트", "cooking_level": "초급", "supplements": "", "household_size": 2,
         "novelty_pref": "", "cooking_tools": "", "medical_conditions": "",
-    })
-    return user_id
+    }, headers=headers)
+    return user_id, headers
 
 
-def test_price_nonexistent_user_returns_404(client):
+def test_price_without_token_returns_401(client):
     res = client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": 999999999})
-    assert res.status_code == 404
+    assert res.status_code == 401
 
 
 def test_price_nonexistent_recipe_returns_404(client, monkeypatch):
     monkeypatch.setattr(price_agent, "get_all_prices", lambda: FAKE_KAMIS_ITEMS)
-    user_id = _signup(client, "u_price_1")
-    res = client.get("/recommendation/recipes/999999/price", params={"user_id": user_id})
+    user_id, headers = _signup(client, "u_price_1")
+    res = client.get("/recommendation/recipes/999999/price", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 404
 
 
 def test_price_recipe_without_ingredients_returns_404(client, monkeypatch):
     monkeypatch.setattr(price_agent, "get_all_prices", lambda: FAKE_KAMIS_ITEMS)
-    user_id = _signup(client, "u_price_2")
+    user_id, headers = _signup(client, "u_price_2")
     res = client.get(
-        f"/recommendation/recipes/{RECIPE_WITHOUT_INGREDIENTS_ID}/price", params={"user_id": user_id}
+        f"/recommendation/recipes/{RECIPE_WITHOUT_INGREDIENTS_ID}/price",
+        params={"user_id": user_id}, headers=headers,
     )
     assert res.status_code == 404
     assert "재료 수량 정보가 없습니다" in res.json()["detail"]
@@ -75,9 +78,9 @@ def test_price_recipe_without_ingredients_returns_404(client, monkeypatch):
 
 def test_price_happy_path_returns_cost_breakdown(client, monkeypatch):
     monkeypatch.setattr(price_agent, "get_all_prices", lambda: FAKE_KAMIS_ITEMS)
-    user_id = _signup_with_household_size_2(client, "u_price_3")
+    user_id, headers = _signup_with_household_size_2(client, "u_price_3")
 
-    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id})
+    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 200
     body = res.json()
     # 재료가 2개뿐이라 estimate_recipe_price_tier()의 "최소 3개 매칭" 기준에 못 미쳐
@@ -100,9 +103,9 @@ def test_price_returns_503_when_kamis_response_is_malformed(client, monkeypatch)
         raise AttributeError("'list' object has no attribute 'get'")
 
     monkeypatch.setattr(price_agent, "get_all_prices", _raise)
-    user_id = _signup(client, "u_price_4")
+    user_id, headers = _signup(client, "u_price_4")
 
-    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id})
+    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 503
     assert "KAMIS" in res.json()["detail"]
 
@@ -112,9 +115,9 @@ def test_price_returns_503_when_kamis_times_out(client, monkeypatch):
         raise requests.exceptions.ReadTimeout("simulated KAMIS timeout")
 
     monkeypatch.setattr(price_agent, "get_all_prices", _raise)
-    user_id = _signup(client, "u_price_5")
+    user_id, headers = _signup(client, "u_price_5")
 
-    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id})
+    res = client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 503
 
 
@@ -126,10 +129,10 @@ def test_price_reuses_cached_kamis_response_within_ttl(client, monkeypatch):
         return FAKE_KAMIS_ITEMS
 
     monkeypatch.setattr(price_agent, "get_all_prices", _fake_prices)
-    user_id = _signup_with_household_size_2(client, "u_price_6")
+    user_id, headers = _signup_with_household_size_2(client, "u_price_6")
 
-    client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id})
-    client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id})
+    client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id}, headers=headers)
+    client.get(f"/recommendation/recipes/{RECIPE_ID}/price", params={"user_id": user_id}, headers=headers)
     # KAMIS는 부류 4개를 매번 순회하는 느린 호출이라, 캐시가 안 먹으면 여기서 4번씩
     # 두 배로 늘어난다 - 두 번째 요청은 캐시를 그대로 써서 fetch 자체가 1번만 일어난다.
     assert call_count["n"] == 1

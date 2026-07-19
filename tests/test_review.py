@@ -17,40 +17,46 @@ TINY_PNG_DATA_URI = (
 )
 
 
-def _signup(client, username: str) -> int:
-    return client.post("/auth/signup", json={"username": username, "password": "pw123456"}).json()["user_id"]
+def _signup(client, username: str) -> tuple[int, dict]:
+    res = client.post("/auth/signup", json={"username": username, "password": "pw123456"})
+    data = res.json()
+    return data["user_id"], {"Authorization": f"Bearer {data['token']}"}
 
 
 def test_create_review_nonexistent_recipe_returns_404(client):
-    user_id = _signup(client, "u_review_1")
+    user_id, headers = _signup(client, "u_review_1")
     res = client.post(
         "/reviews/999999",
         json={"user_id": user_id, "rating": 5, "review_text": "맛있어요"},
+        headers=headers,
     )
     assert res.status_code == 404
 
 
-def test_create_review_nonexistent_user_returns_404(client):
+def test_create_review_as_other_user_returns_403(client):
+    _, headers = _signup(client, "u_review_imposter")
     res = client.post(
         f"/reviews/{RECIPE_ID}",
         json={"user_id": 999999999, "rating": 5, "review_text": "맛있어요"},
+        headers=headers,
     )
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_create_review_rating_out_of_range_returns_422(client):
-    user_id = _signup(client, "u_review_2")
-    res = client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 0, "review_text": "별로"})
+    user_id, headers = _signup(client, "u_review_2")
+    res = client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 0, "review_text": "별로"}, headers=headers)
     assert res.status_code == 422
-    res = client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 6, "review_text": "최고"})
+    res = client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 6, "review_text": "최고"}, headers=headers)
     assert res.status_code == 422
 
 
 def test_create_and_list_review_with_photo(client):
-    user_id = _signup(client, "u_review_3")
+    user_id, headers = _signup(client, "u_review_3")
     create_res = client.post(
         f"/reviews/{RECIPE_ID}",
         json={"user_id": user_id, "rating": 4, "review_text": "사진 첨부해요", "image_url": TINY_PNG_DATA_URI},
+        headers=headers,
     )
     assert create_res.status_code == 200
     assert create_res.json() == {"saved": True}
@@ -65,8 +71,8 @@ def test_create_and_list_review_with_photo(client):
 
 
 def test_create_review_without_photo_has_null_image_url(client):
-    user_id = _signup(client, "u_review_4")
-    client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 5, "review_text": "좋아요"})
+    user_id, headers = _signup(client, "u_review_4")
+    client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 5, "review_text": "좋아요"}, headers=headers)
     reviews = client.get(f"/reviews/{RECIPE_ID}").json()
     assert reviews[0]["image_url"] is None
 
@@ -89,8 +95,8 @@ def test_summary_calls_llm_once_then_uses_cache(client, monkeypatch):
         return "• 가짜 요약 첫째 줄\n• 가짜 요약 둘째 줄"
 
     monkeypatch.setattr(review_agent, "_call_openai_summary", _fake_summary)
-    user_id = _signup(client, "u_review_5")
-    client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 5, "review_text": "한 개 남김"})
+    user_id, headers = _signup(client, "u_review_5")
+    client.post(f"/reviews/{RECIPE_ID}", json={"user_id": user_id, "rating": 5, "review_text": "한 개 남김"}, headers=headers)
 
     first = client.get(f"/reviews/{RECIPE_ID}/summary")
     assert first.status_code == 200

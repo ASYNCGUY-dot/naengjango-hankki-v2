@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from api.ttl_cache import TTLCache
 from src.agents import pantry_agent, safety_agent
@@ -88,9 +89,14 @@ class SafetyOverviewResponse(BaseModel):
 
 
 @router.get("/overview", response_model=SafetyOverviewResponse)
-def safety_overview(user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def safety_overview(
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
     """보유 재료 전체를 한 번에 훑어서 전체/주의/정상으로 집계한다.
     get_all_recalls()는 재료 개수와 무관하게 1번만 호출한다(N+1 방지)."""
+    require_self(user_id, current_user_id)
     pantry_items = pantry_agent.get_pantry_ingredients(cur, user_id)
     if not pantry_items:
         return SafetyOverviewResponse(total=0, warning_count=0, normal_count=0, items=[])

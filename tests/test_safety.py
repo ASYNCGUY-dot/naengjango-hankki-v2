@@ -27,17 +27,19 @@ def _reset_recalls_cache():
     yield
 
 
-def _signup(client, username: str) -> int:
-    return client.post("/auth/signup", json={"username": username, "password": "pw123456"}).json()["user_id"]
+def _signup(client, username: str) -> tuple[int, dict]:
+    res = client.post("/auth/signup", json={"username": username, "password": "pw123456"})
+    data = res.json()
+    return data["user_id"], {"Authorization": f"Bearer {data['token']}"}
 
 
-def _add_pantry(client, user_id: int, name: str, expiry_date: str | None = None):
-    client.post(f"/pantry/{user_id}", json={"name": name, "expiry_date": expiry_date})
+def _add_pantry(client, user_id: int, headers: dict, name: str, expiry_date: str | None = None):
+    client.post(f"/pantry/{user_id}", json={"name": name, "expiry_date": expiry_date}, headers=headers)
 
 
 def test_overview_empty_pantry_returns_zero_counts(client):
-    user_id = _signup(client, "u_safety_1")
-    res = client.get("/safety/overview", params={"user_id": user_id})
+    user_id, headers = _signup(client, "u_safety_1")
+    res = client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 200
     assert res.json() == {"total": 0, "warning_count": 0, "normal_count": 0, "items": []}
 
@@ -47,11 +49,11 @@ def test_overview_flags_recall_match_as_warning(client, monkeypatch):
         safety_agent, "get_all_recalls",
         lambda: [{"PRDTNM": "OO식품 두부", "RTRVLPRVNS": "이물질 혼입"}],
     )
-    user_id = _signup(client, "u_safety_2")
-    _add_pantry(client, user_id, "두부")
-    _add_pantry(client, user_id, "당근")
+    user_id, headers = _signup(client, "u_safety_2")
+    _add_pantry(client, user_id, headers, "두부")
+    _add_pantry(client, user_id, headers, "당근")
 
-    res = client.get("/safety/overview", params={"user_id": user_id})
+    res = client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 200
     body = res.json()
     assert body["total"] == 2
@@ -67,11 +69,11 @@ def test_overview_flags_recall_match_as_warning(client, monkeypatch):
 
 def test_overview_flags_soon_to_expire_item_as_warning(client, monkeypatch):
     monkeypatch.setattr(safety_agent, "get_all_recalls", lambda: [])
-    user_id = _signup(client, "u_safety_3")
+    user_id, headers = _signup(client, "u_safety_3")
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    _add_pantry(client, user_id, "계란", expiry_date=tomorrow)
+    _add_pantry(client, user_id, headers, "계란", expiry_date=tomorrow)
 
-    res = client.get("/safety/overview", params={"user_id": user_id})
+    res = client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 200
     body = res.json()
     assert body["warning_count"] == 1
@@ -84,10 +86,10 @@ def test_overview_returns_503_when_external_api_unavailable(client, monkeypatch)
         raise requests.exceptions.ReadTimeout("simulated food-safety API outage")
 
     monkeypatch.setattr(safety_agent, "get_all_recalls", _raise)
-    user_id = _signup(client, "u_safety_4")
-    _add_pantry(client, user_id, "두부")
+    user_id, headers = _signup(client, "u_safety_4")
+    _add_pantry(client, user_id, headers, "두부")
 
-    res = client.get("/safety/overview", params={"user_id": user_id})
+    res = client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
     assert res.status_code == 503
     assert "식약처" in res.json()["detail"]
 
@@ -100,11 +102,11 @@ def test_overview_reuses_cached_recalls_within_ttl(client, monkeypatch):
         return []
 
     monkeypatch.setattr(safety_agent, "get_all_recalls", _fake_recalls)
-    user_id = _signup(client, "u_safety_5")
-    _add_pantry(client, user_id, "두부")
+    user_id, headers = _signup(client, "u_safety_5")
+    _add_pantry(client, user_id, headers, "두부")
 
-    client.get("/safety/overview", params={"user_id": user_id})
-    client.get("/safety/overview", params={"user_id": user_id})
+    client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
+    client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
     assert call_count["n"] == 1  # 두 번째 요청은 TTLCache가 재사용해서 실제 호출은 1번뿐
 
 
@@ -113,10 +115,10 @@ def test_overview_falls_back_to_last_success_when_api_fails(client, monkeypatch)
         safety_agent, "get_all_recalls",
         lambda: [{"PRDTNM": "OO식품 두부", "RTRVLPRVNS": "이물질 혼입"}],
     )
-    user_id = _signup(client, "u_safety_6")
-    _add_pantry(client, user_id, "두부")
+    user_id, headers = _signup(client, "u_safety_6")
+    _add_pantry(client, user_id, headers, "두부")
 
-    first = client.get("/safety/overview", params={"user_id": user_id})
+    first = client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
     assert first.status_code == 200
     assert first.json()["warning_count"] == 1
 
@@ -124,7 +126,7 @@ def test_overview_falls_back_to_last_success_when_api_fails(client, monkeypatch)
         raise requests.exceptions.ReadTimeout("simulated outage right after a success")
 
     monkeypatch.setattr(safety_agent, "get_all_recalls", _raise)
-    second = client.get("/safety/overview", params={"user_id": user_id})
+    second = client.get("/safety/overview", params={"user_id": user_id}, headers=headers)
     # 방금 API가 실패했어도, 직전 성공 응답이 캐시에 남아있어 503 대신 그 값을 그대로 쓴다.
     assert second.status_code == 200
     assert second.json()["warning_count"] == 1

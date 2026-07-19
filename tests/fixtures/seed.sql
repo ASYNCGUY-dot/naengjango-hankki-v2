@@ -182,6 +182,14 @@ CREATE TABLE user_partner_keys (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+-- 토큰 기반 인가 (2026-07-19, api/auth_token.py). 토큰 원문이 아니라 sha256 해시만 저장한다.
+CREATE TABLE auth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER,
+    created_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 -- 최소 시드 데이터: recommendation/review/safety/price 라우터 테스트용 승인된 레시피 1개.
 -- 두부/양파 두 재료만 써서 recommendation_agent의 자격(qualifies) 판단이 쉽게 재현되게
 -- 했다 - 메뉴명에 "두부"가 그대로 들어있어 core_ingredients가 "두부"로 잡히므로, 보유

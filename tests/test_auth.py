@@ -13,10 +13,44 @@ def test_signup_then_login_succeeds(client):
     signup_res = client.post("/auth/signup", json={"username": "u_auth_1", "password": "pw123456"})
     assert signup_res.status_code == 200
     user_id = signup_res.json()["user_id"]
+    assert signup_res.json()["token"]  # 가입 즉시 토큰이 발급돼야 한다 (#63)
 
     login_res = client.post("/auth/login", json={"username": "u_auth_1", "password": "pw123456"})
     assert login_res.status_code == 200
     assert login_res.json()["user_id"] == user_id
+    assert login_res.json()["token"]
+
+
+def test_token_authorizes_own_data_and_rejects_others(client):
+    """토큰 인가(#63)의 핵심 계약: 토큰 없으면 401, 남의 user_id면 403, 본인이면 200."""
+    a = client.post("/auth/signup", json={"username": "u_authz_a", "password": "pw123456"}).json()
+    b = client.post("/auth/signup", json={"username": "u_authz_b", "password": "pw123456"}).json()
+    headers_a = {"Authorization": f"Bearer {a['token']}"}
+
+    no_token = client.get(f"/profile/{a['user_id']}")
+    assert no_token.status_code == 401
+
+    bad_token = client.get(f"/profile/{a['user_id']}", headers={"Authorization": "Bearer not-a-real-token"})
+    assert bad_token.status_code == 401
+
+    other_user = client.get(f"/profile/{b['user_id']}", headers=headers_a)
+    assert other_user.status_code == 403
+
+    own = client.get(f"/profile/{a['user_id']}", headers=headers_a)
+    assert own.status_code == 200
+
+
+def test_logout_revokes_token(client):
+    data = client.post("/auth/signup", json={"username": "u_logout_1", "password": "pw123456"}).json()
+    headers = {"Authorization": f"Bearer {data['token']}"}
+
+    assert client.get(f"/profile/{data['user_id']}", headers=headers).status_code == 200
+
+    logout_res = client.post("/auth/logout", headers=headers)
+    assert logout_res.status_code == 200
+
+    # 폐기된 토큰으로는 더 이상 접근할 수 없어야 한다
+    assert client.get(f"/profile/{data['user_id']}", headers=headers).status_code == 401
 
 
 def test_duplicate_signup_returns_409(client):

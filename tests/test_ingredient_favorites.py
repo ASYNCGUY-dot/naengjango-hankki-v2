@@ -4,9 +4,10 @@
 """
 
 
-def _signup(client, username: str) -> int:
+def _signup(client, username: str) -> tuple[int, dict]:
     res = client.post("/auth/signup", json={"username": username, "password": "pw123456"})
-    return res.json()["user_id"]
+    data = res.json()
+    return data["user_id"], {"Authorization": f"Bearer {data['token']}"}
 
 
 def _first_food_code(client) -> str:
@@ -18,6 +19,7 @@ def _first_food_code(client) -> str:
 
 
 def test_search_ingredients_returns_results(client):
+    # 검색은 특정 유저의 데이터가 아니므로 토큰 없이 공개다
     res = client.get("/ingredients/search", params={"keyword": "두부", "limit": 5})
     assert res.status_code == 200
     body = res.json()
@@ -27,28 +29,28 @@ def test_search_ingredients_returns_results(client):
 
 
 def test_favorites_list_empty_before_any_toggle(client):
-    user_id = _signup(client, "u_favfood_1")
-    res = client.get(f"/ingredients/{user_id}/favorites")
+    user_id, headers = _signup(client, "u_favfood_1")
+    res = client.get(f"/ingredients/{user_id}/favorites", headers=headers)
     assert res.status_code == 200
     assert res.json() == []
 
 
 def test_toggle_favorite_adds_then_removes(client):
-    user_id = _signup(client, "u_favfood_2")
+    user_id, headers = _signup(client, "u_favfood_2")
     food_code = _first_food_code(client)
 
-    add_res = client.post(f"/ingredients/{user_id}/{food_code}/toggle")
+    add_res = client.post(f"/ingredients/{user_id}/{food_code}/toggle", headers=headers)
     assert add_res.status_code == 200
     assert add_res.json()["favorited"] is True
 
-    list_res = client.get(f"/ingredients/{user_id}/favorites")
+    list_res = client.get(f"/ingredients/{user_id}/favorites", headers=headers)
     codes = [item["food_code"] for item in list_res.json()]
     assert food_code in codes
 
-    remove_res = client.post(f"/ingredients/{user_id}/{food_code}/toggle")
+    remove_res = client.post(f"/ingredients/{user_id}/{food_code}/toggle", headers=headers)
     assert remove_res.status_code == 200
     assert remove_res.json()["favorited"] is False
 
-    list_res_after = client.get(f"/ingredients/{user_id}/favorites")
+    list_res_after = client.get(f"/ingredients/{user_id}/favorites", headers=headers)
     codes_after = [item["food_code"] for item in list_res_after.json()]
     assert food_code not in codes_after

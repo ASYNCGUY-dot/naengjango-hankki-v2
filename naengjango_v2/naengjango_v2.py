@@ -51,6 +51,7 @@ class State(rx.State):
     error_message: str = ""
     submitted_user_id: int | None = None
     profile_complete: bool = False
+    auth_token: str = ""
 
     auth_mode: str = "login"
     auth_username: str = ""
@@ -257,6 +258,14 @@ class State(rx.State):
     def remove_supplement_chip(self, item: str):
         self.supplement_items = [i for i in self.supplement_items if i != item]
 
+    def _auth_headers(self) -> dict:
+        """보호된 API 호출에 싣는 인증 헤더. 로그인 전(토큰 없음)에는 빈 dict를 돌려줘서
+        요청 자체는 나가되 서버가 401로 답하게 한다 - 클라이언트에서 미리 막지 않는 이유는
+        서버 검증이 단일 진실이 되게 하기 위해서다."""
+        if not self.auth_token:
+            return {}
+        return {"Authorization": f"Bearer {self.auth_token}"}
+
     @rx.event
     def set_auth_mode(self, mode: str):
         self.auth_mode = mode
@@ -283,7 +292,9 @@ class State(rx.State):
             self.is_authenticating = False
             return
         if response.status_code == 200:
-            self.submitted_user_id = response.json()["user_id"]
+            data = response.json()
+            self.submitted_user_id = data["user_id"]
+            self.auth_token = data["token"]
             self.profile_complete = False
             self.auth_password = ""
         elif response.status_code == 409:
@@ -326,14 +337,19 @@ class State(rx.State):
                 self.auth_error = f"로그인 실패 ({response.status_code})"
             self.is_authenticating = False
             return
-        self.submitted_user_id = response.json()["user_id"]
+        data = response.json()
+        self.submitted_user_id = data["user_id"]
+        self.auth_token = data["token"]
         self.auth_password = ""
         self._load_profile_after_login()
         self.is_authenticating = False
 
     def _load_profile_after_login(self):
         try:
-            response = requests.get(f"{API_BASE}/profile/{self.submitted_user_id}", timeout=10)
+            response = requests.get(
+                f"{API_BASE}/profile/{self.submitted_user_id}",
+                headers=self._auth_headers(), timeout=10,
+            )
         except requests.RequestException as e:
             self.auth_error = f"서버에 연결할 수 없습니다: {e}"
             return
@@ -364,6 +380,14 @@ class State(rx.State):
 
     @rx.event
     def logout(self):
+        # 서버 쪽 토큰을 먼저 폐기한다 - 실패해도(서버 콜드스타트 등) 로컬 상태는 초기화한다.
+        if self.auth_token:
+            try:
+                requests.post(
+                    f"{API_BASE}/auth/logout", headers=self._auth_headers(), timeout=10
+                )
+            except requests.RequestException:
+                pass
         self.reset()
 
     @rx.event
@@ -391,7 +415,10 @@ class State(rx.State):
             "medical_conditions": self.medical_conditions,
         }
         try:
-            response = requests.put(f"{API_BASE}/profile/{self.submitted_user_id}", json=payload, timeout=10)
+            response = requests.put(
+                f"{API_BASE}/profile/{self.submitted_user_id}", json=payload,
+                headers=self._auth_headers(), timeout=10,
+            )
         except requests.RequestException as e:
             self.error_message = f"서버에 연결할 수 없습니다: {e}"
             self.is_submitting = False
@@ -408,7 +435,10 @@ class State(rx.State):
 
     def _fetch_seasonal(self):
         try:
-            response = requests.get(f"{API_BASE}/seasonal/{self.submitted_user_id}/matches", timeout=10)
+            response = requests.get(
+                f"{API_BASE}/seasonal/{self.submitted_user_id}/matches",
+                headers=self._auth_headers(), timeout=10,
+            )
         except requests.RequestException as e:
             self.seasonal_error = f"서버에 연결할 수 없습니다: {e}"
             return
@@ -457,7 +487,10 @@ class State(rx.State):
         if self.submitted_user_id is None:
             return
         try:
-            response = requests.get(f"{API_BASE}/pantry/{self.submitted_user_id}", timeout=10)
+            response = requests.get(
+                f"{API_BASE}/pantry/{self.submitted_user_id}",
+                headers=self._auth_headers(), timeout=10,
+            )
         except requests.RequestException as e:
             self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
             return
@@ -478,7 +511,8 @@ class State(rx.State):
         }
         try:
             response = requests.post(
-                f"{API_BASE}/pantry/{self.submitted_user_id}", json=payload, timeout=10
+                f"{API_BASE}/pantry/{self.submitted_user_id}", json=payload,
+                headers=self._auth_headers(), timeout=10
             )
         except requests.RequestException as e:
             self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
@@ -508,7 +542,8 @@ class State(rx.State):
             try:
                 requests.post(
                     f"{API_BASE}/pantry/{self.submitted_user_id}",
-                    json={"name": name, "expiry_date": None}, timeout=10,
+                    json={"name": name, "expiry_date": None},
+                    headers=self._auth_headers(), timeout=10,
                 )
             except requests.RequestException as e:
                 self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
@@ -577,7 +612,8 @@ class State(rx.State):
             try:
                 requests.post(
                     f"{API_BASE}/pantry/{self.submitted_user_id}",
-                    json={"name": name, "expiry_date": None}, timeout=10,
+                    json={"name": name, "expiry_date": None},
+                    headers=self._auth_headers(), timeout=10,
                 )
             except requests.RequestException as e:
                 self.pantry_photo_error = f"서버에 연결할 수 없습니다: {e}"
@@ -614,7 +650,8 @@ class State(rx.State):
         payload = {"name": name, "expiry_date": None}
         try:
             response = requests.post(
-                f"{API_BASE}/pantry/{self.submitted_user_id}", json=payload, timeout=10
+                f"{API_BASE}/pantry/{self.submitted_user_id}", json=payload,
+                headers=self._auth_headers(), timeout=10
             )
         except requests.RequestException as e:
             self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
@@ -628,7 +665,8 @@ class State(rx.State):
     def _fetch_favorite_ingredients(self):
         try:
             response = requests.get(
-                f"{API_BASE}/ingredients/{self.submitted_user_id}/favorites", timeout=10
+                f"{API_BASE}/ingredients/{self.submitted_user_id}/favorites",
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.favorite_ingredients_error = f"서버에 연결할 수 없습니다: {e}"
@@ -643,7 +681,8 @@ class State(rx.State):
     def toggle_ingredient_favorite(self, food_code: str):
         try:
             response = requests.post(
-                f"{API_BASE}/ingredients/{self.submitted_user_id}/{food_code}/toggle", timeout=10
+                f"{API_BASE}/ingredients/{self.submitted_user_id}/{food_code}/toggle",
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.favorite_ingredients_error = f"서버에 연결할 수 없습니다: {e}"
@@ -657,7 +696,8 @@ class State(rx.State):
     def remove_ingredient(self, ingredient_id: int):
         try:
             response = requests.delete(
-                f"{API_BASE}/pantry/{self.submitted_user_id}/{ingredient_id}", timeout=10
+                f"{API_BASE}/pantry/{self.submitted_user_id}/{ingredient_id}",
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
@@ -675,7 +715,8 @@ class State(rx.State):
         try:
             response = requests.get(
                 f"{API_BASE}/safety/overview",
-                params={"user_id": self.submitted_user_id}, timeout=20,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=20,
             )
         except requests.RequestException as e:
             self.safety_overview_error = f"서버에 연결할 수 없습니다: {e}"
@@ -718,6 +759,7 @@ class State(rx.State):
             response = requests.get(
                 f"{API_BASE}/recommendation/{self.submitted_user_id}",
                 params={"limit": 5},
+                headers=self._auth_headers(),
                 # 추천 계산이 레시피 1,148개를 훑는 방식이라 느리다(수 초~십수 초) - 넉넉하게 잡는다.
                 timeout=60,
             )
@@ -780,7 +822,8 @@ class State(rx.State):
         try:
             response = requests.get(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/ingredients",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException:
             return
@@ -791,7 +834,8 @@ class State(rx.State):
         try:
             response = requests.get(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/like",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.like_error = f"서버에 연결할 수 없습니다: {e}"
@@ -810,7 +854,8 @@ class State(rx.State):
         try:
             response = requests.post(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/like/toggle",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.like_error = f"서버에 연결할 수 없습니다: {e}"
@@ -833,7 +878,8 @@ class State(rx.State):
         try:
             response = requests.get(
                 f"{API_BASE}/ingredient-submissions",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.my_ingredient_submissions_error = f"서버에 연결할 수 없습니다: {e}"
@@ -873,7 +919,8 @@ class State(rx.State):
         try:
             response = requests.post(
                 f"{API_BASE}/ingredient-submissions",
-                params={"user_id": self.submitted_user_id}, json=payload, timeout=10,
+                params={"user_id": self.submitted_user_id}, json=payload,
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.ingredient_submission_error = f"서버에 연결할 수 없습니다: {e}"
@@ -912,10 +959,12 @@ class State(rx.State):
         self.admin_error = ""
         try:
             r1 = requests.get(
-                f"{API_BASE}/admin/pending-recipes", params={"user_id": self.submitted_user_id}, timeout=10
+                f"{API_BASE}/admin/pending-recipes", params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10
             )
             r2 = requests.get(
-                f"{API_BASE}/admin/pending-ingredients", params={"user_id": self.submitted_user_id}, timeout=10
+                f"{API_BASE}/admin/pending-ingredients", params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10
             )
         except requests.RequestException as e:
             self.admin_error = f"서버에 연결할 수 없습니다: {e}"
@@ -936,7 +985,8 @@ class State(rx.State):
         try:
             response = requests.post(
                 f"{API_BASE}/admin/promote",
-                params={"user_id": self.submitted_user_id}, json={"code": self.admin_code_input}, timeout=10,
+                params={"user_id": self.submitted_user_id}, json={"code": self.admin_code_input},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.admin_promote_error = f"서버에 연결할 수 없습니다: {e}"
@@ -954,7 +1004,8 @@ class State(rx.State):
         try:
             requests.post(
                 f"{API_BASE}/admin/recipes/{recipe_id}/approve",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.admin_error = f"서버에 연결할 수 없습니다: {e}"
@@ -966,7 +1017,8 @@ class State(rx.State):
         try:
             requests.post(
                 f"{API_BASE}/admin/recipes/{recipe_id}/reject",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.admin_error = f"서버에 연결할 수 없습니다: {e}"
@@ -978,7 +1030,8 @@ class State(rx.State):
         try:
             requests.post(
                 f"{API_BASE}/admin/ingredients/{submission_id}/approve",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.admin_error = f"서버에 연결할 수 없습니다: {e}"
@@ -990,7 +1043,8 @@ class State(rx.State):
         try:
             requests.post(
                 f"{API_BASE}/admin/ingredients/{submission_id}/reject",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.admin_error = f"서버에 연결할 수 없습니다: {e}"
@@ -1007,6 +1061,7 @@ class State(rx.State):
             response = requests.get(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/price",
                 params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(),
                 timeout=30,
             )
         except requests.RequestException as e:
@@ -1034,6 +1089,7 @@ class State(rx.State):
             response = requests.get(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/nutrition-fit",
                 params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(),
                 timeout=15,
             )
         except requests.RequestException as e:
@@ -1062,6 +1118,7 @@ class State(rx.State):
             response = requests.get(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/shopping-links",
                 params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(),
                 timeout=15,
             )
         except requests.RequestException as e:
@@ -1081,6 +1138,7 @@ class State(rx.State):
             response = requests.get(
                 f"{API_BASE}/recommendation/recipes/{recipe_id}/substitution",
                 params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(),
                 timeout=10,
             )
         except requests.RequestException as e:
@@ -1125,7 +1183,10 @@ class State(rx.State):
 
     def _check_favorited(self, recipe_id: int):
         try:
-            response = requests.get(f"{API_BASE}/favorites/{self.submitted_user_id}", timeout=10)
+            response = requests.get(
+                f"{API_BASE}/favorites/{self.submitted_user_id}",
+                headers=self._auth_headers(), timeout=10,
+            )
         except requests.RequestException:
             return
         if response.status_code == 200:
@@ -1136,7 +1197,8 @@ class State(rx.State):
         recipe_id = self.selected_recipe["id"]
         try:
             response = requests.post(
-                f"{API_BASE}/favorites/{self.submitted_user_id}/{recipe_id}/toggle", timeout=10
+                f"{API_BASE}/favorites/{self.submitted_user_id}/{recipe_id}/toggle",
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.favorite_error = f"서버에 연결할 수 없습니다: {e}"
@@ -1207,7 +1269,10 @@ class State(rx.State):
             "image_url": self.review_photo_url or None,
         }
         try:
-            response = requests.post(f"{API_BASE}/reviews/{recipe_id}", json=payload, timeout=10)
+            response = requests.post(
+                f"{API_BASE}/reviews/{recipe_id}", json=payload,
+                headers=self._auth_headers(), timeout=10,
+            )
         except requests.RequestException as e:
             self.review_error = f"서버에 연결할 수 없습니다: {e}"
             self.submitting_review = False
@@ -1250,7 +1315,10 @@ class State(rx.State):
         self.loading_favorites = True
         self.favorites_error = ""
         try:
-            response = requests.get(f"{API_BASE}/favorites/{self.submitted_user_id}", timeout=10)
+            response = requests.get(
+                f"{API_BASE}/favorites/{self.submitted_user_id}",
+                headers=self._auth_headers(), timeout=10,
+            )
         except requests.RequestException as e:
             self.favorites_error = f"서버에 연결할 수 없습니다: {e}"
             self.loading_favorites = False
@@ -1264,7 +1332,8 @@ class State(rx.State):
     def _fetch_my_recipes(self):
         try:
             response = requests.get(
-                f"{API_BASE}/my-recipes", params={"user_id": self.submitted_user_id}, timeout=10
+                f"{API_BASE}/my-recipes", params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10
             )
         except requests.RequestException as e:
             self.my_recipes_error = f"서버에 연결할 수 없습니다: {e}"
@@ -1289,7 +1358,8 @@ class State(rx.State):
         try:
             response = requests.get(
                 f"{API_BASE}/my-recipes/{recipe_id}",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.my_recipes_error = f"서버에 연결할 수 없습니다: {e}"
@@ -1336,12 +1406,14 @@ class State(rx.State):
             if self.my_recipe_editing_id is not None:
                 response = requests.put(
                     f"{API_BASE}/my-recipes/{self.my_recipe_editing_id}",
-                    params={"user_id": self.submitted_user_id}, json=payload, timeout=10,
+                    params={"user_id": self.submitted_user_id}, json=payload,
+                headers=self._auth_headers(), timeout=10,
                 )
             else:
                 response = requests.post(
                     f"{API_BASE}/my-recipes",
-                    params={"user_id": self.submitted_user_id}, json=payload, timeout=10,
+                    params={"user_id": self.submitted_user_id}, json=payload,
+                headers=self._auth_headers(), timeout=10,
                 )
         except requests.RequestException as e:
             self.my_recipe_form_error = f"서버에 연결할 수 없습니다: {e}"
@@ -1359,7 +1431,8 @@ class State(rx.State):
         try:
             response = requests.delete(
                 f"{API_BASE}/my-recipes/{recipe_id}",
-                params={"user_id": self.submitted_user_id}, timeout=10,
+                params={"user_id": self.submitted_user_id},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.my_recipes_error = f"서버에 연결할 수 없습니다: {e}"

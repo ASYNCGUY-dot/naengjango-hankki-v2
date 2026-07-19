@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import pantry_agent, recommendation_agent
 
@@ -69,7 +70,13 @@ class RecipeDetail(BaseModel):
 
 
 @router.get("/{user_id}", response_model=list[RecommendationItem])
-def recommend(user_id: int, limit: int = 10, cur: sqlite3.Cursor = Depends(get_db)):
+def recommend(
+    user_id: int,
+    limit: int = 10,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     profile = recommendation_agent.get_user_profile(cur, user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")

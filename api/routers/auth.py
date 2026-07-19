@@ -15,10 +15,11 @@ import sqlite3
 import time
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from pydantic import BaseModel
 
+from api import auth_token
 from api.deps import get_db
 from src.agents import auth_agent
 
@@ -59,6 +60,7 @@ class SignupRequest(BaseModel):
 
 class SignupResponse(BaseModel):
     user_id: int
+    token: str
 
 
 class LoginRequest(BaseModel):
@@ -68,6 +70,7 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     user_id: int
+    token: str
 
 
 @router.post("/signup", response_model=SignupResponse)
@@ -80,7 +83,7 @@ def signup(body: SignupRequest, cur: sqlite3.Cursor = Depends(get_db)):
     user_id = auth_agent.signup(cur, body.username, body.password)
     if user_id is None:
         raise HTTPException(status_code=409, detail="이미 존재하는 아이디입니다.")
-    return SignupResponse(user_id=user_id)
+    return SignupResponse(user_id=user_id, token=auth_token.issue_token(cur, user_id))
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -95,4 +98,13 @@ def login(body: LoginRequest, cur: sqlite3.Cursor = Depends(get_db)):
         _record_failed_login(body.username)
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다.")
     _clear_failed_logins(body.username)
-    return LoginResponse(user_id=user_id)
+    return LoginResponse(user_id=user_id, token=auth_token.issue_token(cur, user_id))
+
+
+@router.post("/logout")
+def logout(authorization: str | None = Header(default=None), cur: sqlite3.Cursor = Depends(get_db)):
+    """현재 토큰을 즉시 무효화한다. 헤더가 없거나 이미 무효한 토큰이어도 조용히 성공으로
+    처리한다 - 로그아웃은 어차피 '로그인 안 된 상태로 만들기'가 목적이기 때문이다."""
+    if authorization and authorization.startswith("Bearer "):
+        auth_token.revoke_token(cur, authorization[len("Bearer "):].strip())
+    return {"logged_out": True}

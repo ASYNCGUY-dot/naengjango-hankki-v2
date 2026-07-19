@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import pantry_agent, seasonal_agent
 
@@ -37,7 +38,13 @@ class SeasonalMatchResponse(BaseModel):
 
 
 @router.get("/{user_id}/matches", response_model=SeasonalMatchResponse)
-def get_seasonal_matches(user_id: int, month: int | None = None, cur: sqlite3.Cursor = Depends(get_db)):
+def get_seasonal_matches(
+    user_id: int,
+    month: int | None = None,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
     if cur.fetchone() is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import ingredient_catalog_agent, ingredient_favorite_agent
 
@@ -47,11 +48,22 @@ class ToggleResponse(BaseModel):
 
 
 @router.post("/{user_id}/{food_code}/toggle", response_model=ToggleResponse)
-def toggle_ingredient_favorite(user_id: int, food_code: str, cur: sqlite3.Cursor = Depends(get_db)):
+def toggle_ingredient_favorite(
+    user_id: int,
+    food_code: str,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     favorited = ingredient_favorite_agent.toggle_ingredient_favorite(cur, user_id, food_code)
     return ToggleResponse(favorited=favorited)
 
 
 @router.get("/{user_id}/favorites", response_model=list[dict])
-def list_favorite_ingredients(user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def list_favorite_ingredients(
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     return ingredient_favorite_agent.get_favorite_ingredients(cur, user_id)

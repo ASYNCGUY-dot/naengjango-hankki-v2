@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import ingredient_catalog_agent, nutrition_target_agent, portion_agent, recommendation_agent
 
@@ -99,7 +100,13 @@ def _build_recipe_micro(cur: sqlite3.Cursor, recipe_id: int, household_size: int
 
 
 @router.get("/{recipe_id}/nutrition-fit", response_model=NutritionFitResponse)
-def get_nutrition_fit(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def get_nutrition_fit(
+    recipe_id: int,
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     profile = recommendation_agent.get_user_profile(cur, user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")
@@ -136,8 +143,14 @@ def get_nutrition_fit(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depend
 
 
 @router.get("/{recipe_id}/ingredients", response_model=list[IngredientDisplayItem])
-def get_recipe_ingredients_scaled(recipe_id: int, user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def get_recipe_ingredients_scaled(
+    recipe_id: int,
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
     """가구원 수에 맞춰 환산된 재료 수량 목록. portion_agent.py 로직 그대로 재사용한다."""
+    require_self(user_id, current_user_id)
     profile = recommendation_agent.get_user_profile(cur, user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")

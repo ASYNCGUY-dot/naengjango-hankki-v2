@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import favorite_agent
 
@@ -40,13 +41,24 @@ def _require_recipe(cur: sqlite3.Cursor, recipe_id: int):
 
 
 @router.get("/{user_id}", response_model=list[FavoriteItem])
-def list_favorites(user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def list_favorites(
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     _require_user(cur, user_id)
     return favorite_agent.get_favorite_recipes(cur, user_id)
 
 
 @router.post("/{user_id}/{recipe_id}/toggle", response_model=ToggleResponse)
-def toggle(user_id: int, recipe_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def toggle(
+    user_id: int,
+    recipe_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     _require_user(cur, user_id)
     _require_recipe(cur, recipe_id)
     favorited = favorite_agent.toggle_favorite(cur, user_id, recipe_id)

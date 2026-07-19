@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
+from api.auth_token import get_current_user_id, require_self
 from api.deps import get_db
 from src.agents import profile_agent, recommendation_agent
 
@@ -49,7 +50,12 @@ class ProfileGetResponse(BaseModel):
 
 
 @router.get("/{user_id}", response_model=ProfileGetResponse)
-def get_profile(user_id: int, cur: sqlite3.Cursor = Depends(get_db)):
+def get_profile(
+    user_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     profile = recommendation_agent.get_user_profile(cur, user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")
@@ -70,7 +76,13 @@ def create_profile(body: ProfileRequest, cur: sqlite3.Cursor = Depends(get_db)):
 
 
 @router.put("/{user_id}")
-def update_profile(user_id: int, body: ProfileRequest, cur: sqlite3.Cursor = Depends(get_db)):
+def update_profile(
+    user_id: int,
+    body: ProfileRequest,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    require_self(user_id, current_user_id)
     profile = body.model_dump()
     missing = profile_agent.validate_profile(profile)
     if missing:
