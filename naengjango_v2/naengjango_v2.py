@@ -61,16 +61,30 @@ class State(rx.State):
     is_authenticating: bool = False
 
     pantry_items: list[dict] = []
-    new_ingredient_name: str = ""
-    new_ingredient_expiry: str = ""
     pantry_error: str = ""
-    category_selected_ingredients: list[str] = []
-    pantry_input_mode: str = "category"
+    show_photo_upload: bool = False
+    expiry_edit_id: int = -1
+    expiry_edit_value: str = ""
 
     pantry_photo_uploading: bool = False
     pantry_photo_error: str = ""
     pantry_photo_detected: list[str] = []
     pantry_photo_selected: list[str] = []
+
+    @rx.var
+    def quick_add_names(self) -> list[str]:
+        """빠른 추가 칩 목록: 즐겨찾는 재료 우선 + 자주 쓰는 기본 재료. 이미 냉장고에
+        있는 재료는 빼서, 칩은 항상 "지금 추가할 수 있는 것"만 보여준다."""
+        pantry_names = {item["name"] for item in self.pantry_items}
+        names: list[str] = []
+        for item in self.favorite_ingredients_list:
+            if item["name"] not in pantry_names and item["name"] not in names:
+                names.append(item["name"])
+        for group in CATEGORY_INGREDIENTS.values():
+            for name in group:
+                if name not in pantry_names and name not in names:
+                    names.append(name)
+        return names[:14]
 
     safety_overview_loading: bool = False
     safety_overview_error: str = ""
@@ -515,56 +529,49 @@ class State(rx.State):
             self.pantry_error = f"조회 실패 ({response.status_code})"
 
     @rx.event
-    def add_ingredient(self):
-        if not self.new_ingredient_name.strip():
+    def toggle_photo_upload(self):
+        self.show_photo_upload = not self.show_photo_upload
+
+    @rx.event
+    def add_ingredient_by_keyword(self):
+        """검색창에 적힌 이름을 카탈로그 매칭 여부와 무관하게 그대로 냉장고에 추가한다."""
+        name = self.catalog_keyword.strip()
+        if not name:
             self.pantry_error = "재료 이름을 입력해주세요."
             return
-        payload = {
-            "name": self.new_ingredient_name.strip(),
-            "expiry_date": self.new_ingredient_expiry.strip() or None,
-        }
+        self.add_ingredient_from_catalog(name)
+        if not self.pantry_error:
+            self.catalog_keyword = ""
+            self.catalog_results = []
+            self.catalog_total = 0
+
+    @rx.event
+    def open_expiry_edit(self, ingredient_id: int, current: str):
+        self.expiry_edit_id = ingredient_id
+        self.expiry_edit_value = current or ""
+
+    @rx.event
+    def cancel_expiry_edit(self):
+        self.expiry_edit_id = -1
+        self.expiry_edit_value = ""
+
+    @rx.event
+    def save_expiry_edit(self):
         try:
-            response = requests.post(
-                f"{API_BASE}/pantry/{self.submitted_user_id}", json=payload,
-                headers=self._auth_headers(), timeout=10
+            response = requests.put(
+                f"{API_BASE}/pantry/{self.submitted_user_id}/{self.expiry_edit_id}",
+                json={"expiry_date": self.expiry_edit_value.strip() or None},
+                headers=self._auth_headers(), timeout=10,
             )
         except requests.RequestException as e:
             self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
             return
         if response.status_code == 200:
-            self.new_ingredient_name = ""
-            self.new_ingredient_expiry = ""
+            self.expiry_edit_id = -1
+            self.expiry_edit_value = ""
             self._fetch_pantry()
-            self._fetch_seasonal()
         else:
-            self.pantry_error = f"추가 실패 ({response.status_code})"
-
-    @rx.event
-    def set_pantry_input_mode(self, mode: str):
-        self.pantry_input_mode = mode
-
-    @rx.event
-    def toggle_category_ingredient(self, name: str):
-        if name in self.category_selected_ingredients:
-            self.category_selected_ingredients = [i for i in self.category_selected_ingredients if i != name]
-        else:
-            self.category_selected_ingredients = self.category_selected_ingredients + [name]
-
-    @rx.event
-    def confirm_category_ingredients(self):
-        for name in self.category_selected_ingredients:
-            try:
-                requests.post(
-                    f"{API_BASE}/pantry/{self.submitted_user_id}",
-                    json={"name": name, "expiry_date": None},
-                    headers=self._auth_headers(), timeout=10,
-                )
-            except requests.RequestException as e:
-                self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
-                return
-        self.category_selected_ingredients = []
-        self._fetch_pantry()
-        self._fetch_seasonal()
+            self.pantry_error = f"유통기한 수정 실패 ({response.status_code})"
 
     @rx.event
     async def handle_pantry_photo_upload(self, files: list[rx.UploadFile]):
@@ -671,6 +678,7 @@ class State(rx.State):
             self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
             return
         if response.status_code == 200:
+            self.pantry_error = ""
             self._fetch_pantry()
             self._fetch_seasonal()
         else:
@@ -1690,25 +1698,46 @@ def onboarding_form() -> rx.Component:
 
 
 def pantry_item_row(item: dict) -> rx.Component:
-    return rx.card(
-        rx.hstack(
-            rx.text(item["name"], weight="medium"),
-            rx.text(
-                rx.cond(item["expiry_date"], item["expiry_date"], "유통기한 미입력"),
-                size="2",
-                color="gray",
-            ),
-            rx.spacer(),
-            rx.button(
-                "삭제",
-                size="1",
-                color_scheme="red",
-                variant="soft",
-                on_click=lambda: State.remove_ingredient(item["id"]),
-            ),
-            width="100%",
-            align="center",
+    normal_row = rx.hstack(
+        rx.text(item["name"], weight="medium"),
+        rx.text(
+            rx.cond(item["expiry_date"], item["expiry_date"], "유통기한 미입력"),
+            size="2",
+            color="gray",
         ),
+        rx.spacer(),
+        rx.icon_button(
+            rx.icon("pencil", size=14),
+            size="1", variant="ghost", color_scheme="gray",
+            # expiry_date가 None일 수 있어 문자열 인자로 넘기기 전에 ""로 바꿔준다
+            on_click=lambda: State.open_expiry_edit(
+                item["id"], rx.cond(item["expiry_date"], item["expiry_date"], "")
+            ),
+        ),
+        rx.button(
+            "삭제",
+            size="1",
+            color_scheme="red",
+            variant="soft",
+            on_click=lambda: State.remove_ingredient(item["id"]),
+        ),
+        width="100%",
+        align="center",
+    )
+    edit_row = rx.hstack(
+        rx.text(item["name"], weight="medium", flex_shrink="0"),
+        rx.input(
+            placeholder="YYYY-MM-DD (비우면 삭제)",
+            value=State.expiry_edit_value,
+            on_change=lambda v: State.set_field("expiry_edit_value", v),
+            width="100%", size="1",
+        ),
+        rx.button("저장", size="1", on_click=State.save_expiry_edit),
+        rx.button("취소", size="1", variant="soft", color_scheme="gray", on_click=State.cancel_expiry_edit),
+        width="100%", align="center",
+    )
+    return rx.card(
+        rx.cond(State.expiry_edit_id == item["id"], edit_row, normal_row),
         width="100%",
     )
 
@@ -2853,38 +2882,6 @@ def favorite_ingredients_section() -> rx.Component:
     )
 
 
-def catalog_search_section() -> rx.Component:
-    return rx.vstack(
-        rx.divider(),
-        rx.heading("재료 찾아보기", size="6"),
-        rx.hstack(
-            rx.input(
-                placeholder="재료 이름으로 검색 (예: 두부)",
-                value=State.catalog_keyword,
-                on_change=lambda v: State.set_field("catalog_keyword", v),
-                width="100%",
-            ),
-            rx.button("검색", on_click=State.search_catalog, loading=State.catalog_searching),
-            width="100%",
-        ),
-        rx.cond(
-            State.catalog_error != "",
-            rx.callout(State.catalog_error, color_scheme="red", width="100%"),
-        ),
-        rx.cond(
-            State.catalog_results.length() > 0,
-            rx.vstack(
-                rx.text(f"검색 결과 {State.catalog_total}건 중 일부", size="2", color="gray"),
-                rx.foreach(State.catalog_results, catalog_result_row),
-                width="100%",
-                spacing="2",
-            ),
-        ),
-        width="100%",
-        spacing="3",
-    )
-
-
 def ingredient_submission_status_badge(status: str) -> rx.Component:
     return rx.cond(
         status == "approved",
@@ -2988,48 +2985,26 @@ def seasonal_section() -> rx.Component:
     )
 
 
-def category_ingredient_tile(name: str) -> rx.Component:
-    return rx.card(
+def quick_add_chip(name: str) -> rx.Component:
+    """누르면 즉시 냉장고에 추가되는 원탭 칩 - 예전 카테고리 그리드의 "선택 후 확인" 2단계를 없앴다."""
+    return rx.badge(
+        rx.hstack(rx.icon("plus", size=12), rx.text(name, size="2"), spacing="1", align="center"),
+        color_scheme="grass", variant="soft", size="2", cursor="pointer",
+        on_click=lambda: State.add_ingredient_from_catalog(name),
+    )
+
+
+def quick_add_chips_section() -> rx.Component:
+    return rx.cond(
+        State.quick_add_names.length() > 0,
         rx.vstack(
-            rx.icon("leafy-green", size=22),
-            rx.text(name, size="2", weight="medium"),
-            rx.cond(
-                State.category_selected_ingredients.contains(name),
-                rx.icon("circle-check", size=16, color=rx.color("grass", 9)),
+            rx.text("빠른 추가 (누르면 바로 담겨요)", size="2", weight="bold", color="gray"),
+            rx.hstack(
+                rx.foreach(State.quick_add_names, quick_add_chip),
+                wrap="wrap", spacing="2",
             ),
-            align="center", spacing="1",
+            width="100%", spacing="2", align="start",
         ),
-        on_click=lambda: State.toggle_category_ingredient(name),
-        cursor="pointer",
-        variant=rx.cond(State.category_selected_ingredients.contains(name), "surface", "classic"),
-        width="90px",
-    )
-
-
-def category_ingredient_group(category: str, names: list[str]) -> rx.Component:
-    return rx.vstack(
-        rx.text(category, size="2", weight="bold", color="gray"),
-        rx.hstack(
-            rx.foreach(names, category_ingredient_tile),
-            wrap="wrap", spacing="2",
-        ),
-        width="100%", spacing="2", align="start",
-    )
-
-
-def category_ingredient_grid() -> rx.Component:
-    return rx.vstack(
-        category_ingredient_group("채소/과일", CATEGORY_INGREDIENTS["채소/과일"]),
-        category_ingredient_group("육류/생선", CATEGORY_INGREDIENTS["육류/생선"]),
-        category_ingredient_group("유제품/계란", CATEGORY_INGREDIENTS["유제품/계란"]),
-        category_ingredient_group("기타", CATEGORY_INGREDIENTS["기타"]),
-        rx.button(
-            f"재료 확인하기 ({State.category_selected_ingredients.length()}개)",
-            on_click=State.confirm_category_ingredients,
-            width="100%", size="3",
-            disabled=State.category_selected_ingredients.length() == 0,
-        ),
-        width="100%", spacing="3",
     )
 
 
@@ -3095,47 +3070,51 @@ def pantry_photo_upload_section() -> rx.Component:
     )
 
 
-def pantry_input_section() -> rx.Component:
+def pantry_quick_add_bar() -> rx.Component:
+    """검색 겸 추가 입력줄 하나로 통합: 검색하면 카탈로그 결과에서 원탭 추가, 결과에
+    없으면 적은 이름 그대로 바로 추가. 사진 인식은 카메라 버튼으로 펼친다."""
     return rx.vstack(
         rx.hstack(
-            rx.button(
-                "카테고리 선택", size="2",
-                variant=rx.cond(State.pantry_input_mode == "category", "solid", "soft"),
-                on_click=lambda: State.set_pantry_input_mode("category"),
+            rx.input(
+                placeholder="재료 이름 검색 또는 입력 (예: 두부)",
+                value=State.catalog_keyword,
+                on_change=lambda v: State.set_field("catalog_keyword", v),
+                on_key_down=lambda k: rx.cond(k == "Enter", State.search_catalog(), rx.noop()),
+                width="100%",
             ),
-            rx.button(
-                "직접 입력", size="2",
-                variant=rx.cond(State.pantry_input_mode == "direct", "solid", "soft"),
-                on_click=lambda: State.set_pantry_input_mode("direct"),
-            ),
-            rx.button(
-                "사진 업로드", size="2",
-                variant=rx.cond(State.pantry_input_mode == "photo", "solid", "soft"),
-                on_click=lambda: State.set_pantry_input_mode("photo"),
+            rx.button("검색", on_click=State.search_catalog, loading=State.catalog_searching),
+            rx.icon_button(
+                rx.icon("camera", size=18),
+                variant=rx.cond(State.show_photo_upload, "solid", "soft"),
+                on_click=State.toggle_photo_upload,
             ),
             width="100%",
         ),
-        rx.match(
-            State.pantry_input_mode,
-            ("category", category_ingredient_grid()),
-            ("photo", pantry_photo_upload_section()),
-            rx.hstack(
-                rx.input(
-                    placeholder="재료 이름 (예: 두부)",
-                    value=State.new_ingredient_name,
-                    on_change=lambda v: State.set_field("new_ingredient_name", v),
-                    width="100%",
-                ),
-                rx.input(
-                    placeholder="유통기한 YYYY-MM-DD (선택)",
-                    value=State.new_ingredient_expiry,
-                    on_change=lambda v: State.set_field("new_ingredient_expiry", v),
-                    width="100%",
-                ),
-                rx.button("추가", on_click=State.add_ingredient),
-                width="100%",
+        rx.cond(
+            State.show_photo_upload,
+            pantry_photo_upload_section(),
+        ),
+        rx.cond(
+            State.catalog_error != "",
+            rx.callout(State.catalog_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.catalog_results.length() > 0,
+            rx.vstack(
+                rx.text(f"검색 결과 {State.catalog_total}건 중 일부", size="2", color="gray"),
+                rx.foreach(State.catalog_results, catalog_result_row),
+                width="100%", spacing="2",
             ),
         ),
+        rx.cond(
+            State.catalog_keyword.strip() != "",
+            rx.button(
+                f'"{State.catalog_keyword}" 바로 추가',
+                size="2", variant="soft", width="100%",
+                on_click=State.add_ingredient_by_keyword,
+            ),
+        ),
+        quick_add_chips_section(),
         width="100%", spacing="3",
     )
 
@@ -3247,12 +3226,13 @@ def home_view() -> rx.Component:
 def fridge_view() -> rx.Component:
     return rx.vstack(
         rx.heading("내 냉장고", size="6"),
-        rx.text(f"user_id = {State.submitted_user_id}", color="gray", size="2"),
-        pantry_input_section(),
+        pantry_quick_add_bar(),
         rx.cond(
             State.pantry_error != "",
             rx.callout(State.pantry_error, color_scheme="red", width="100%"),
         ),
+        rx.divider(),
+        rx.heading(f"보유 재료 ({State.pantry_items.length()}개)", size="4"),
         rx.cond(
             State.pantry_items.length() > 0,
             rx.vstack(
@@ -3260,11 +3240,10 @@ def fridge_view() -> rx.Component:
                 width="100%",
                 spacing="2",
             ),
-            rx.text("아직 등록된 재료가 없습니다.", color="gray"),
+            rx.text("아직 등록된 재료가 없습니다. 위에서 검색하거나 칩을 눌러 담아보세요.", color="gray", size="2"),
         ),
-        catalog_search_section(),
-        favorite_ingredients_section(),
         ingredient_submission_section(),
+        favorite_ingredients_section(),
         safety_result_panel(),
         spacing="4",
         width="100%",

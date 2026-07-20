@@ -38,6 +38,22 @@ def remove_pantry_ingredient(cur, ingredient_id: int, user_id: int):
     )
 
 
+def update_pantry_expiry(cur, ingredient_id: int, user_id: int, expiry_date: str | None) -> bool:
+    """보유 재료의 유통기한만 갱신한다 (2026-07-19 냉장고 화면 개편 - 목록에서 바로 수정).
+    remove와 같은 이유로 user_id까지 확인하고, 본인 재료가 아니면 False를 돌려준다."""
+    cur.execute(
+        "SELECT id FROM ingredients WHERE id = ? AND user_id = ?",
+        (ingredient_id, user_id)
+    )
+    if cur.fetchone() is None:
+        return False
+    cur.execute(
+        "UPDATE ingredients SET expiry_date = ? WHERE id = ?",
+        (expiry_date, ingredient_id)
+    )
+    return True
+
+
 def get_pantry_ingredients(cur, user_id: int) -> list[dict]:
     """유통기한이 가까운 순으로 정렬한다 (NULL은 맨 뒤로)."""
     cur.execute("""
