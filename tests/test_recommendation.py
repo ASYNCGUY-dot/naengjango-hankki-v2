@@ -7,6 +7,10 @@
 
 seed.sql의 레시피 1개("두부조림", 재료: 두부/양파)를 기준으로, 보유 재료에 "두부"가 있으면
 자격(qualifies)을 얻도록 설계했다(메뉴명에 "두부"가 그대로 들어있어 core_ingredients로 잡힘).
+
+2026-07-19 추가: 추천 화면 개편으로 /recommendation/{user_id}가 더 이상 pantry를 자동
+조회하지 않고, 쿼리 파라미터 ingredients로 넘긴 목록만 그대로 쓴다 - 그래서 아래 테스트는
+pantry에 재료를 넣어두더라도 추천 호출 시 ingredients를 명시적으로 함께 넘긴다.
 """
 
 PROFILE_PAYLOAD = {
@@ -44,7 +48,9 @@ def test_recommend_without_token_returns_401(client):
 
 def test_recommend_with_matching_pantry_returns_qualified_recipe_with_nutrients(client):
     user_id, headers = _signup_with_pantry(client, "u_reco_1", ["두부"])
-    res = client.get(f"/recommendation/{user_id}", params={"limit": 10}, headers=headers)
+    res = client.get(
+        f"/recommendation/{user_id}", params={"limit": 10, "ingredients": ["두부"]}, headers=headers,
+    )
     assert res.status_code == 200
     items = res.json()
     assert len(items) >= 1
@@ -64,10 +70,21 @@ def test_recommend_without_matching_pantry_recipe_not_qualified_but_still_listed
     # 두부/양파와 전혀 무관한 재료만 보유하면, coverage_ratio가 문턱(0.2) 밑이라 자격을
     # 얻지 못한다 - 다만 알레르기에 걸리지 않는 한 후보 목록 자체에서 빠지지는 않는다.
     user_id, headers = _signup_with_pantry(client, "u_reco_2", ["오이"])
+    res = client.get(f"/recommendation/{user_id}", params={"ingredients": ["오이"]}, headers=headers)
+    assert res.status_code == 200
+    item = next(i for i in res.json() if i["id"] == RECIPE_ID)
+    assert item["qualifies"] is False
+
+
+def test_recommend_without_ingredients_param_returns_unqualified_list(client):
+    # 추천 화면 개편(2026-07-19): 재료 목록을 아예 안 넘기면(빈 칸 상태) 더 이상 pantry를
+    # 자동으로 읽지 않고, 재료 없는 것으로 취급해서 전부 자격 미달(qualifies=False)로 나온다.
+    user_id, headers = _signup_with_pantry(client, "u_reco_5", ["두부"])
     res = client.get(f"/recommendation/{user_id}", headers=headers)
     assert res.status_code == 200
     item = next(i for i in res.json() if i["id"] == RECIPE_ID)
     assert item["qualifies"] is False
+    assert item["ingredient_overlap"] == 0
 
 
 def test_get_recipe_detail(client):

@@ -99,6 +99,15 @@ class State(rx.State):
     recommending: bool = False
     recommend_error: str = ""
     recommend_filter: str = "전체"
+    recommend_fetched: bool = False
+
+    recommend_ingredients: list[str] = []
+    recommend_manual_input: str = ""
+    recommend_search_keyword: str = ""
+    recommend_search_results: list[dict] = []
+    recommend_searching: bool = False
+
+    is_page_loading: bool = False
 
     selected_recipe: dict | None = None
     recipe_steps: list[dict] = []
@@ -775,12 +784,14 @@ class State(rx.State):
 
     @rx.event
     def get_recommendations(self):
+        """추천 화면 개편(2026-07-19): 더 이상 보유 재료(pantry)를 자동으로 쓰지 않고,
+        사용자가 이 화면에서 직접 구성한 recommend_ingredients만 그대로 서버에 넘긴다."""
         self.recommending = True
         self.recommend_error = ""
         try:
             response = requests.get(
                 f"{API_BASE}/recommendation/{self.submitted_user_id}",
-                params={"limit": 5},
+                params={"limit": 5, "ingredients": self.recommend_ingredients},
                 headers=self._auth_headers(),
                 # 추천 계산이 레시피 1,148개를 훑는 방식이라 느리다(수 초~십수 초) - 넉넉하게 잡는다.
                 timeout=60,
@@ -791,9 +802,55 @@ class State(rx.State):
             return
         if response.status_code == 200:
             self.recommendations = response.json()
+            self.recommend_fetched = True
         else:
             self.recommend_error = f"추천 실패 ({response.status_code})"
         self.recommending = False
+
+    @rx.event
+    def add_recommend_ingredient_manual(self):
+        name = self.recommend_manual_input.strip()
+        if name and name not in self.recommend_ingredients:
+            self.recommend_ingredients = self.recommend_ingredients + [name]
+        self.recommend_manual_input = ""
+
+    @rx.event
+    def remove_recommend_ingredient(self, name: str):
+        self.recommend_ingredients = [n for n in self.recommend_ingredients if n != name]
+
+    @rx.event
+    def load_pantry_into_recommend_ingredients(self):
+        """"냉장고에서 불러오기" - 지금 보유 재료 전체를 이번 추천용 목록에 합친다(중복 제외)."""
+        existing = set(self.recommend_ingredients)
+        added = [item["name"] for item in self.pantry_items if item["name"] not in existing]
+        self.recommend_ingredients = self.recommend_ingredients + added
+
+    @rx.event
+    def search_recommend_ingredient(self):
+        keyword = self.recommend_search_keyword.strip()
+        if not keyword:
+            return
+        self.recommend_searching = True
+        try:
+            response = requests.get(
+                f"{API_BASE}/ingredients/search",
+                params={"keyword": keyword, "limit": 8},
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            self.recommend_error = f"서버에 연결할 수 없습니다: {e}"
+            self.recommend_searching = False
+            return
+        if response.status_code == 200:
+            self.recommend_search_results = response.json()["items"]
+        else:
+            self.recommend_error = f"검색 실패 ({response.status_code})"
+        self.recommend_searching = False
+
+    @rx.event
+    def add_recommend_ingredient_from_search(self, name: str):
+        if name not in self.recommend_ingredients:
+            self.recommend_ingredients = self.recommend_ingredients + [name]
 
     @rx.event
     def set_recommend_filter(self, value: str):
@@ -806,13 +863,16 @@ class State(rx.State):
         return [r for r in self.recommendations if r.get("nutrition_group") == self.recommend_filter]
 
     @rx.event
-    def view_recipe(self, recipe_id: int):
+    async def view_recipe(self, recipe_id: int):
+        self.is_page_loading = True
+        yield
         self.recipe_detail_error = ""
         self.recipe_detail_tab = "recipe"
         try:
             response = requests.get(f"{API_BASE}/recommendation/recipes/{recipe_id}", timeout=10)
         except requests.RequestException as e:
             self.recipe_detail_error = f"서버에 연결할 수 없습니다: {e}"
+            self.is_page_loading = False
             return
         if response.status_code == 200:
             recipe = response.json()
@@ -838,6 +898,7 @@ class State(rx.State):
             self._fetch_recipe_ingredients(recipe_id)
         else:
             self.recipe_detail_error = f"조회 실패 ({response.status_code})"
+        self.is_page_loading = False
 
     def _fetch_recipe_ingredients(self, recipe_id: int):
         self.recipe_ingredients_list = []
@@ -962,7 +1023,12 @@ class State(rx.State):
         self.ingredient_submission_submitting = False
 
     @rx.event
-    def set_main_tab(self, tab: str):
+    async def set_main_tab(self, tab: str):
+        """탭을 옮기는 동안 데이터를 불러오느라 화면이 멈춘 것처럼 보이지 않도록,
+        먼저 로딩 오버레이를 띄우고(yield로 그 상태를 즉시 브라우저에 반영한 뒤)
+        실제 데이터 요청을 진행한다."""
+        self.is_page_loading = True
+        yield
         self.main_tab = tab
         self.selected_recipe = None
         if tab == "community":
@@ -977,6 +1043,7 @@ class State(rx.State):
             self._fetch_my_recipes()
             if self.is_admin:
                 self._fetch_admin_pending()
+        self.is_page_loading = False
 
     def _fetch_admin_pending(self):
         self.admin_loading = True
@@ -1926,11 +1993,88 @@ def recommend_filter_chip(label: str) -> rx.Component:
     )
 
 
+def recommend_ingredient_chip(name: str) -> rx.Component:
+    return rx.badge(
+        rx.hstack(
+            rx.text(name, size="2"),
+            rx.icon("x", size=12, cursor="pointer", on_click=lambda: State.remove_recommend_ingredient(name)),
+            spacing="1", align="center",
+        ),
+        color_scheme="grass", variant="soft", size="2",
+    )
+
+
+def recommend_search_result_row(item: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(item["name"], size="2"),
+        rx.spacer(),
+        rx.button(
+            "추가", size="1", variant="soft",
+            on_click=lambda: State.add_recommend_ingredient_from_search(item["name"]),
+        ),
+        width="100%", align="center",
+    )
+
+
+def recommend_ingredient_picker() -> rx.Component:
+    """추천에 쓸 재료를 그때그때 구성하는 섹션 - 기본은 빈 칸에서 수기 입력하고,
+    필요하면 냉장고 재료를 통째로 불러오거나 재료를 검색해서 추가할 수 있다."""
+    return rx.vstack(
+        rx.text("이번 추천에 쓸 재료", size="2", weight="bold", color="gray"),
+        rx.cond(
+            State.recommend_ingredients.length() > 0,
+            rx.hstack(
+                rx.foreach(State.recommend_ingredients, recommend_ingredient_chip),
+                wrap="wrap", spacing="2", width="100%",
+            ),
+            rx.text("아직 추가한 재료가 없어요.", size="2", color="gray"),
+        ),
+        rx.hstack(
+            rx.input(
+                placeholder="재료 이름 입력 후 Enter (예: 두부)",
+                value=State.recommend_manual_input,
+                on_change=lambda v: State.set_field("recommend_manual_input", v),
+                on_key_down=lambda k: rx.cond(k == "Enter", State.add_recommend_ingredient_manual(), rx.noop()),
+                width="100%",
+            ),
+            rx.button("추가", size="2", variant="soft", on_click=State.add_recommend_ingredient_manual),
+            width="100%",
+        ),
+        rx.button(
+            "냉장고에서 불러오기", size="2", variant="soft", width="100%",
+            on_click=State.load_pantry_into_recommend_ingredients,
+        ),
+        rx.hstack(
+            rx.input(
+                placeholder="재료 찾아서 추가하기",
+                value=State.recommend_search_keyword,
+                on_change=lambda v: State.set_field("recommend_search_keyword", v),
+                on_key_down=lambda k: rx.cond(k == "Enter", State.search_recommend_ingredient(), rx.noop()),
+                width="100%",
+            ),
+            rx.button(
+                "검색", size="2", on_click=State.search_recommend_ingredient,
+                loading=State.recommend_searching,
+            ),
+            width="100%",
+        ),
+        rx.cond(
+            State.recommend_search_results.length() > 0,
+            rx.vstack(
+                rx.foreach(State.recommend_search_results, recommend_search_result_row),
+                width="100%", spacing="1",
+            ),
+        ),
+        width="100%", spacing="3",
+    )
+
+
 def recommendation_section() -> rx.Component:
     return rx.vstack(
         rx.divider(),
         rx.heading("오늘은 어떤 메뉴가 좋을까요?", size="6"),
-        rx.text("보유 재료와 프로필을 기반으로 추천했어요.", size="2", color="gray"),
+        rx.text("재료를 구성하고 추천 받기를 눌러보세요.", size="2", color="gray"),
+        recommend_ingredient_picker(),
         rx.button(
             "추천 받기",
             on_click=State.get_recommendations,
@@ -1940,6 +2084,10 @@ def recommendation_section() -> rx.Component:
         rx.cond(
             State.recommend_error != "",
             rx.callout(State.recommend_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.recommend_fetched & (State.recommendations.length() == 0),
+            rx.text("조건에 맞는 추천 결과가 없어요. 재료를 더 추가해보세요.", size="2", color="gray"),
         ),
         rx.cond(
             State.recommendations.length() > 0,
@@ -3326,7 +3474,7 @@ def bottom_nav() -> rx.Component:
         rx.hstack(
             bottom_nav_button("홈", "house", "home"),
             bottom_nav_button("냉장고", "refrigerator", "fridge"),
-            bottom_nav_button("추천", "sparkles", "recommend", [State.get_recommendations()]),
+            bottom_nav_button("추천", "sparkles", "recommend"),
             bottom_nav_button("커뮤니티", "users", "community"),
             bottom_nav_button("마이페이지", "user", "mypage"),
             width="100%",
@@ -3355,6 +3503,24 @@ def app_header() -> rx.Component:
     )
 
 
+def loading_overlay() -> rx.Component:
+    """탭 전환·레시피 상세 진입처럼 데이터를 새로 불러오는 동안 화면이 멈춘 것처럼
+    보이지 않도록 잠깐 띄우는 전체 화면 오버레이(2026-07-19 추가)."""
+    return rx.cond(
+        State.is_page_loading,
+        rx.center(
+            rx.vstack(
+                rx.spinner(size="3"),
+                rx.text("불러오는 중...", size="2", color="gray"),
+                spacing="3", align="center",
+            ),
+            position="fixed", inset="0",
+            background=rx.color("gray", 3, alpha=True),
+            z_index="1000",
+        ),
+    )
+
+
 def index() -> rx.Component:
     return rx.container(
         rx.vstack(
@@ -3367,6 +3533,7 @@ def index() -> rx.Component:
             padding_bottom="8em",
         ),
         bottom_nav(),
+        loading_overlay(),
     )
 
 
