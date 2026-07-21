@@ -1602,7 +1602,7 @@ def chip_input(
 def auth_form() -> rx.Component:
     return rx.card(
         rx.vstack(
-            rx.image(src="/logo.svg", height="80px"),
+            rx.image(src="/logo.svg", height="180px"),
             rx.hstack(
                 rx.button(
                     "로그인", flex="1",
@@ -3492,8 +3492,9 @@ def bottom_nav() -> rx.Component:
 
 
 def app_header() -> rx.Component:
+    # 좌측 상단 로고는 뺐다(2026-07-19 사용자 요청) - 너무 작아 문구가 안 보였고,
+    # 로그인 화면의 메인 로고(auth_form)를 키워서 그쪽에서만 크게 보여준다.
     return rx.hstack(
-        rx.image(src="/logo.svg", height="64px"),
         rx.spacer(),
         rx.color_mode.button(),
         width="100%",
