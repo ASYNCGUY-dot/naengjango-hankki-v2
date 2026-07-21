@@ -107,6 +107,12 @@ class State(rx.State):
     recommend_search_results: list[dict] = []
     recommend_searching: bool = False
 
+    # "이 메뉴가 싫다면?" 대체 추천(2026-07-21, #req6) - 카드 하나당 한 번에 하나만 보여준다.
+    alternative_for_id: int | None = None
+    alternative_recipe: dict | None = None
+    alternative_loading: bool = False
+    alternative_error: str = ""
+
     is_page_loading: bool = False
 
     selected_recipe: dict | None = None
@@ -139,6 +145,10 @@ class State(rx.State):
     favorites_list: list[dict] = []
     favorites_error: str = ""
     loading_favorites: bool = False
+
+    # 즐겨찾기 탭 "요즘 인기 있는 레시피" 섹션(2026-07-21, #req5)
+    popular_recipes: list[dict] = []
+    popular_recipes_error: str = ""
 
     popular_categories: list[str] = []
     popular_videos_list: list[dict] = []
@@ -205,6 +215,7 @@ class State(rx.State):
     seasonal_ingredients: list[str] = []
     seasonal_matches: list[str] = []
     seasonal_error: str = ""
+    seasonal_recipe: dict | None = None
 
     shopping_links: list[dict] = []
     shopping_loading: bool = False
@@ -484,8 +495,30 @@ class State(rx.State):
             self.seasonal_ingredients = data["seasonal_ingredients"]
             self.seasonal_matches = data["matches"]
             self.seasonal_error = ""
+            self._fetch_seasonal_recipe()
         else:
             self.seasonal_error = f"조회 실패 ({response.status_code})"
+
+    def _fetch_seasonal_recipe(self):
+        """"이 달의 제철 재료" 옆에 그 재료로 만들 수 있는 레시피를 하나 보여준다
+        (2026-07-21, #req7). 제철 재료가 여러 개면 첫 번째 것으로만 찾아본다."""
+        if not self.seasonal_ingredients:
+            self.seasonal_recipe = None
+            return
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/recipes/search",
+                params={"keyword": self.seasonal_ingredients[0], "limit": 1},
+                timeout=10,
+            )
+        except requests.RequestException:
+            self.seasonal_recipe = None
+            return
+        if response.status_code == 200:
+            items = response.json()
+            self.seasonal_recipe = items[0] if items else None
+        else:
+            self.seasonal_recipe = None
 
     def _fetch_popular_categories(self):
         try:
@@ -724,7 +757,16 @@ class State(rx.State):
             self.favorite_ingredients_error = f"즐겨찾기 실패 ({response.status_code})"
 
     @rx.event
-    def remove_ingredient(self, ingredient_id: int):
+    async def remove_ingredient(self, ingredient_id: int):
+        """낙관적 업데이트(2026-07-21): 예전에는 DELETE 성공 후 pantry+seasonal을 다시
+        조회(HTTP 2회 추가)해서 화면이 갱신될 때까지 체감 지연이 컸다. 이제는 로컬 목록에서
+        먼저 지워 즉시 반영하고, 서버에는 삭제 요청만 보낸다. 실패하면 그때만 다시 조회해
+        원래 상태로 되돌린다."""
+        removed_name = next((i["name"] for i in self.pantry_items if i["id"] == ingredient_id), None)
+        self.pantry_items = [i for i in self.pantry_items if i["id"] != ingredient_id]
+        if removed_name:
+            self.seasonal_matches = [n for n in self.seasonal_matches if n != removed_name]
+        yield
         try:
             response = requests.delete(
                 f"{API_BASE}/pantry/{self.submitted_user_id}/{ingredient_id}",
@@ -732,12 +774,13 @@ class State(rx.State):
             )
         except requests.RequestException as e:
             self.pantry_error = f"서버에 연결할 수 없습니다: {e}"
-            return
-        if response.status_code == 200:
             self._fetch_pantry()
             self._fetch_seasonal()
-        else:
+            return
+        if response.status_code != 200:
             self.pantry_error = f"삭제 실패 ({response.status_code})"
+            self._fetch_pantry()
+            self._fetch_seasonal()
 
     @rx.event
     def fetch_safety_overview(self):
@@ -808,6 +851,32 @@ class State(rx.State):
         self.recommending = False
 
     @rx.event
+    async def get_alternative(self, recipe_id: int):
+        """"이 메뉴가 싫다면?" 버튼(2026-07-21, #req6) - 재료와 무관하게 영양군이 같으면서
+        칼로리가 가장 비슷한 다른 레시피를 하나 보여준다. 카드 하나당 한 번에 하나만 보여준다."""
+        self.alternative_for_id = recipe_id
+        self.alternative_recipe = None
+        self.alternative_error = ""
+        self.alternative_loading = True
+        yield
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/{self.submitted_user_id}/alternative/{recipe_id}",
+                headers=self._auth_headers(), timeout=15,
+            )
+        except requests.RequestException as e:
+            self.alternative_error = f"서버에 연결할 수 없습니다: {e}"
+            self.alternative_loading = False
+            return
+        if response.status_code == 200:
+            self.alternative_recipe = response.json()
+        elif response.status_code == 404:
+            self.alternative_error = "영양 구성이 비슷한 다른 레시피를 찾지 못했어요."
+        else:
+            self.alternative_error = f"조회 실패 ({response.status_code})"
+        self.alternative_loading = False
+
+    @rx.event
     def add_recommend_ingredient_manual(self):
         name = self.recommend_manual_input.strip()
         if name and name not in self.recommend_ingredients:
@@ -843,6 +912,7 @@ class State(rx.State):
             return
         if response.status_code == 200:
             self.recommend_search_results = response.json()["items"]
+            self.recommend_error = ""
         else:
             self.recommend_error = f"검색 실패 ({response.status_code})"
         self.recommend_searching = False
@@ -1031,14 +1101,16 @@ class State(rx.State):
         yield
         self.main_tab = tab
         self.selected_recipe = None
-        if tab == "community":
+        if tab == "favorites":
+            # 커뮤니티 -> 즐겨찾기로 개편(2026-07-21, #req5): 재료 즐겨찾기(예전엔 냉장고
+            # 탭에 있었다) + 레시피 즐겨찾기 + 인기 레시피(좋아요순)를 한 곳에서 보여준다.
             self._fetch_favorites_list()
+            self._fetch_favorite_ingredients()
+            self._fetch_popular_recipes()
         elif tab == "home":
             # 인기 레시피 영상 섹션이 홈으로 옮겨왔다 - 로그인 직후 이미 받아왔으면 재요청하지 않는다.
             if not self.popular_categories:
                 self._fetch_popular_categories()
-        elif tab == "fridge":
-            self._fetch_favorite_ingredients()
         elif tab == "mypage":
             self._fetch_my_recipes()
             if self.is_admin:
@@ -1419,6 +1491,19 @@ class State(rx.State):
         else:
             self.favorites_error = f"조회 실패 ({response.status_code})"
         self.loading_favorites = False
+
+    def _fetch_popular_recipes(self):
+        """즐겨찾기 탭 "요즘 인기 있는 레시피" 섹션(2026-07-21, #req5) - 좋아요 많은 순."""
+        try:
+            response = requests.get(f"{API_BASE}/recommendation/recipes/popular", params={"limit": 5}, timeout=10)
+        except requests.RequestException as e:
+            self.popular_recipes_error = f"서버에 연결할 수 없습니다: {e}"
+            return
+        if response.status_code == 200:
+            self.popular_recipes = response.json()
+            self.popular_recipes_error = ""
+        else:
+            self.popular_recipes_error = f"조회 실패 ({response.status_code})"
 
     def _fetch_my_recipes(self):
         try:
@@ -1893,18 +1978,60 @@ def safety_result_panel() -> rx.Component:
     )
 
 
-def recommendation_reason(item: dict) -> rx.Component:
-    return rx.text(
-        rx.cond(
-            item["has_protein_match"],
-            f"{item['nutrition_group']} 식단에 적합하고, 오늘 보유한 재료로 만들 수 있어요.",
+def recommendation_nutrition_rationale(item: dict) -> rx.Component:
+    """영양학적 설명 보완(2026-07-21, #req6) - "적합하고"라고만 뭉뚱그리지 않고, 카드에
+    이미 표시 중인 4대 영양소 값을 근거로 왜 이 영양군인지 구체적으로 말해준다."""
+    return rx.match(
+        item["nutrition_group"],
+        (
+            "고단백",
             rx.cond(
-                item["ingredient_overlap"],
-                "오늘 보유한 재료로 충분히 만들 수 있어요.",
-                "냉장고에 없는 재료가 많지만 참고해보세요.",
+                item["protein_g"] != None,  # noqa: E711
+                f"단백질 {item['protein_g']}g으로 비중이 높아 포만감과 근육 유지에 좋아요.",
+                "단백질 비중이 높은 메뉴예요.",
             ),
         ),
-        size="1", color="gray",
+        (
+            "고탄수화물",
+            rx.cond(
+                item["carbs_g"] != None,  # noqa: E711
+                f"탄수화물 {item['carbs_g']}g으로 활동 에너지원이 풍부해요.",
+                "탄수화물 비중이 높은 메뉴예요.",
+            ),
+        ),
+        (
+            "고지방",
+            rx.cond(
+                item["fat_g"] != None,  # noqa: E711
+                f"지방 {item['fat_g']}g으로 적은 양에도 든든해요.",
+                "지방 비중이 높은 메뉴예요.",
+            ),
+        ),
+        ("균형", "탄수화물·단백질·지방이 고르게 갖춰진 균형 잡힌 메뉴예요."),
+        f"{item['nutrition_group']}으로 분류된 메뉴예요.",
+    )
+
+
+def recommendation_reason(item: dict) -> rx.Component:
+    # 문구 수정(2026-07-21, #req4): "보유한 재료"/"냉장고"라는 표현이 실제로는 이번 추천에
+    # 구성한 재료 목록(recommend_ingredients) 기준인데도 "냉장고 재료 우선 추천"으로
+    # 오해하게 만들었다 - 실제 계산 로직(recommendation.py의 recommend())은 이미 화면에서
+    # 구성한 재료 목록만 쓰고 있어서(pantry 자동조회 없음), 문구만 그 사실에 맞게 바꾼다.
+    return rx.vstack(
+        rx.text(recommendation_nutrition_rationale(item), size="1", color="gray"),
+        rx.text(
+            rx.cond(
+                item["has_protein_match"],
+                "선택하신 재료로 만들 수 있어요.",
+                rx.cond(
+                    item["ingredient_overlap"],
+                    "선택하신 재료로 충분히 만들 수 있어요.",
+                    "선택하신 재료와 겹치는 게 적지만 참고해보세요.",
+                ),
+            ),
+            size="1", color="gray",
+        ),
+        spacing="0", width="100%", align="start",
     )
 
 
@@ -1946,6 +2073,37 @@ def recommendation_nutrient_row(item: dict) -> rx.Component:
     )
 
 
+def alternative_recipe_card() -> rx.Component:
+    """"이 메뉴가 싫다면?" 결과 - 재료와 무관하게 영양군이 같은 다른 레시피 하나(2026-07-21, #req6)."""
+    return rx.cond(
+        State.alternative_loading,
+        rx.center(rx.spinner(size="2"), padding_y="2", width="100%"),
+        rx.cond(
+            State.alternative_error != "",
+            rx.callout(State.alternative_error, color_scheme="red", width="100%", size="1"),
+            rx.cond(
+                State.alternative_recipe != None,  # noqa: E711
+                rx.card(
+                    rx.vstack(
+                        rx.text("영양 구성이 비슷한 다른 메뉴예요", size="1", color="gray"),
+                        rx.text(State.alternative_recipe["menu_name"], weight="bold"),
+                        rx.text(
+                            f"{State.alternative_recipe['nutrition_group']} · {State.alternative_recipe['calorie']}kcal",
+                            size="2", color="gray",
+                        ),
+                        rx.button(
+                            "이 레시피 보기", size="1", width="100%",
+                            on_click=lambda: State.view_recipe(State.alternative_recipe["id"]),
+                        ),
+                        spacing="1", width="100%",
+                    ),
+                    width="100%", variant="surface",
+                ),
+            ),
+        ),
+    )
+
+
 def recommendation_card(item: dict) -> rx.Component:
     return rx.card(
         rx.vstack(
@@ -1959,7 +2117,9 @@ def recommendation_card(item: dict) -> rx.Component:
                 rx.spacer(),
                 rx.cond(
                     item["qualifies"],
-                    rx.badge("보유재료 활용", color_scheme="grass"),
+                    # 문구 수정(2026-07-21, #req4) - "보유재료"는 냉장고를 연상시키지만
+                    # 실제로는 이번 추천에 선택한 재료 기준이라 표현을 맞춘다.
+                    rx.badge("선택 재료 활용", color_scheme="grass"),
                     rx.badge("참고용", color_scheme="gray"),
                 ),
                 width="100%",
@@ -1975,6 +2135,14 @@ def recommendation_card(item: dict) -> rx.Component:
             ),
             rx.button("상세보기 (조리단계)", size="2", width="100%",
                       on_click=lambda: State.view_recipe(item["id"])),
+            rx.button(
+                "이 메뉴가 싫다면?", size="2", variant="soft", width="100%",
+                on_click=lambda: State.get_alternative(item["id"]),
+            ),
+            rx.cond(
+                State.alternative_for_id == item["id"],
+                alternative_recipe_card(),
+            ),
             spacing="2",
             width="100%",
         ),
@@ -2686,7 +2854,7 @@ def favorite_list_item(item: dict) -> rx.Component:
 
 def favorites_list_view() -> rx.Component:
     return rx.vstack(
-        rx.heading("즐겨찾기한 레시피", size="6"),
+        rx.heading("나중에 볼 레시피", size="4"),
         rx.cond(
             State.favorites_error != "",
             rx.callout(State.favorites_error, color_scheme="red", width="100%"),
@@ -2694,11 +2862,51 @@ def favorites_list_view() -> rx.Component:
         rx.cond(
             State.favorites_list.length() > 0,
             rx.vstack(rx.foreach(State.favorites_list, favorite_list_item), width="100%", spacing="2"),
-            rx.text("즐겨찾기한 레시피가 없습니다.", color="gray"),
+            rx.text("즐겨찾기한 레시피가 없습니다.", color="gray", size="2"),
         ),
-        spacing="4",
+        spacing="2",
         width="100%",
-        max_width="480px",
+    )
+
+
+def popular_recipe_list_item(item: dict) -> rx.Component:
+    return rx.card(
+        rx.hstack(
+            rx.vstack(
+                rx.text(item["menu_name"], weight="medium"),
+                rx.text(
+                    rx.cond(
+                        item["calorie"] != None,  # noqa: E711
+                        f"{item['category']} · {item['calorie']}kcal",
+                        item["category"],
+                    ),
+                    size="2", color="gray",
+                ),
+                align="start", spacing="0",
+            ),
+            rx.spacer(),
+            rx.badge(f"♥ {item['like_count']}", color_scheme="red", variant="soft"),
+            rx.button("상세보기", size="1", on_click=lambda: State.view_recipe(item["id"])),
+            width="100%", align="center",
+        ),
+        width="100%",
+    )
+
+
+def popular_recipes_section() -> rx.Component:
+    return rx.vstack(
+        rx.heading("요즘 인기 있는 레시피", size="4"),
+        rx.cond(
+            State.popular_recipes_error != "",
+            rx.callout(State.popular_recipes_error, color_scheme="red", width="100%"),
+        ),
+        rx.cond(
+            State.popular_recipes.length() > 0,
+            rx.vstack(rx.foreach(State.popular_recipes, popular_recipe_list_item), width="100%", spacing="2"),
+            rx.text("아직 추천(좋아요)이 쌓인 레시피가 없습니다.", color="gray", size="2"),
+        ),
+        spacing="2",
+        width="100%",
     )
 
 
@@ -3015,18 +3223,18 @@ def favorite_ingredient_row(item: dict) -> rx.Component:
 
 
 def favorite_ingredients_section() -> rx.Component:
-    return rx.cond(
-        State.favorite_ingredients_list.length() > 0,
-        rx.vstack(
-            rx.divider(),
-            rx.heading("즐겨찾는 재료", size="4"),
-            rx.cond(
-                State.favorite_ingredients_error != "",
-                rx.callout(State.favorite_ingredients_error, color_scheme="red", width="100%"),
-            ),
-            rx.foreach(State.favorite_ingredients_list, favorite_ingredient_row),
-            width="100%", spacing="2",
+    return rx.vstack(
+        rx.heading("나중에 쓸 재료", size="4"),
+        rx.cond(
+            State.favorite_ingredients_error != "",
+            rx.callout(State.favorite_ingredients_error, color_scheme="red", width="100%"),
         ),
+        rx.cond(
+            State.favorite_ingredients_list.length() > 0,
+            rx.foreach(State.favorite_ingredients_list, favorite_ingredient_row),
+            rx.text("즐겨찾기한 재료가 없습니다.", color="gray", size="2"),
+        ),
+        width="100%", spacing="2",
     )
 
 
@@ -3120,6 +3328,25 @@ def seasonal_section() -> rx.Component:
                     rx.text("보유 재료 중 제철 품목:", size="2", color="grass"),
                     rx.foreach(State.seasonal_matches, lambda name: rx.badge(name, color_scheme="grass")),
                     wrap="wrap",
+                    width="100%",
+                ),
+            ),
+            rx.cond(
+                State.seasonal_recipe != None,  # noqa: E711
+                rx.card(
+                    rx.hstack(
+                        rx.vstack(
+                            rx.text("이 재료로 만들 수 있어요", size="1", color="gray"),
+                            rx.text(State.seasonal_recipe["menu_name"], weight="medium"),
+                            align="start", spacing="0",
+                        ),
+                        rx.spacer(),
+                        rx.button(
+                            "레시피 보기", size="1",
+                            on_click=lambda: State.view_recipe(State.seasonal_recipe["id"]),
+                        ),
+                        width="100%", align="center",
+                    ),
                     width="100%",
                 ),
             ),
@@ -3391,7 +3618,6 @@ def fridge_view() -> rx.Component:
             rx.text("아직 등록된 재료가 없습니다. 위에서 검색하거나 칩을 눌러 담아보세요.", color="gray", size="2"),
         ),
         ingredient_submission_section(),
-        favorite_ingredients_section(),
         safety_result_panel(),
         spacing="4",
         width="100%",
@@ -3407,10 +3633,17 @@ def recommend_view() -> rx.Component:
     )
 
 
-def community_view() -> rx.Component:
-    # 인기 레시피 영상은 홈 화면으로 이동했다(2026-07-19 사용자 요청) - 여기는 즐겨찾기만 남긴다.
+def favorites_view() -> rx.Component:
+    # 커뮤니티 -> 즐겨찾기로 개편(2026-07-21, #req5): "커뮤니티"라는 이름과 달리 실제로는
+    # 즐겨찾기 레시피만 보여주고 있어서 이름과 내용이 안 맞았다. 이름을 실제 내용에 맞게
+    # 바꾸고, 나중에 쓸 재료/나중에 볼 레시피/요즘 인기 있는 레시피 3섹션으로 구성한다.
     return rx.vstack(
+        rx.heading("즐겨찾기", size="6"),
+        favorite_ingredients_section(),
+        rx.divider(),
         favorites_list_view(),
+        rx.divider(),
+        popular_recipes_section(),
         spacing="4",
         width="100%",
         max_width="480px",
@@ -3448,7 +3681,7 @@ def main_area() -> rx.Component:
                     State.main_tab,
                     ("fridge", fridge_view()),
                     ("recommend", recommend_view()),
-                    ("community", community_view()),
+                    ("favorites", favorites_view()),
                     ("mypage", mypage_view()),
                     home_view(),
                 ),
@@ -3475,7 +3708,7 @@ def bottom_nav() -> rx.Component:
             bottom_nav_button("홈", "house", "home"),
             bottom_nav_button("냉장고", "refrigerator", "fridge"),
             bottom_nav_button("추천", "sparkles", "recommend"),
-            bottom_nav_button("커뮤니티", "users", "community"),
+            bottom_nav_button("즐겨찾기", "heart", "favorites"),
             bottom_nav_button("마이페이지", "user", "mypage"),
             width="100%",
             max_width="480px",

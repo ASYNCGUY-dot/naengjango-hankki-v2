@@ -99,6 +99,57 @@ def recommend(
     return top
 
 
+@router.get("/{user_id}/alternative/{recipe_id}", response_model=RecommendationItem)
+def get_alternative(
+    user_id: int,
+    recipe_id: int,
+    cur: sqlite3.Cursor = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    """"이 메뉴가 싫다면?" 버튼(2026-07-21, #req6) - recipe_id의 영양군과 같으면서
+    칼로리가 가장 비슷한 다른 레시피를 재료와 무관하게 하나 골라준다."""
+    require_self(user_id, current_user_id)
+    profile = recommendation_agent.get_user_profile(cur, user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="존재하지 않는 user_id입니다.")
+
+    current = recommendation_agent.get_recipe_by_id(cur, recipe_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="존재하지 않는 recipe_id입니다.")
+
+    alternative = recommendation_agent.get_alternative_recipe(
+        cur, profile, recipe_id, current["nutrition_group"]
+    )
+    if alternative is None:
+        raise HTTPException(status_code=404, detail="대체할 만한 레시피를 찾지 못했습니다.")
+
+    alternative.update(_parse_nutrients(alternative.get("nutrients_json")))
+    # RecommendationItem이 요구하는 필드(ingredient_overlap 등)는 재료 무관 추천이라 의미가
+    # 없으니 0/False 기본값으로 채운다 - 프론트는 이 응답을 별도의 간단한 카드로 보여준다.
+    alternative.setdefault("ingredient_overlap", 0)
+    alternative.setdefault("coverage_ratio", 0.0)
+    alternative.setdefault("qualifies", False)
+    alternative.setdefault("has_protein_match", False)
+    return alternative
+
+
+class RecipeSummary(BaseModel):
+    id: int
+    menu_name: str
+    category: str | None
+    calorie: float | None
+
+
+# "/recipes/search"는 "/recipes/{recipe_id}"보다 먼저 등록해야 한다 - 안 그러면 "search"가
+# recipe_id 자리에 매칭 시도되다 int 변환에 실패해 422가 난다(#req5에서 popular 엔드포인트로
+# 겪은 것과 같은 문제, api/main.py 참고).
+@router.get("/recipes/search", response_model=list[RecipeSummary])
+def search_recipes(keyword: str = "", limit: int = 5, cur: sqlite3.Cursor = Depends(get_db)):
+    """홈 화면 "이 달의 제철 재료" 옆에 관련 레시피를 보여줄 때 쓴다(2026-07-21, #req7).
+    프로필/알레르기 필터 없는 공개 조회라 recommend()와 달리 인가를 요구하지 않는다."""
+    return recommendation_agent.search_all_recipes(cur, keyword=keyword, limit=limit)
+
+
 @router.get("/recipes/{recipe_id}", response_model=RecipeDetail)
 def get_recipe(recipe_id: int, cur: sqlite3.Cursor = Depends(get_db)):
     recipe = recommendation_agent.get_recipe_by_id(cur, recipe_id)

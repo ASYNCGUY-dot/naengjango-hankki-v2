@@ -87,6 +87,39 @@ def test_recommend_without_ingredients_param_returns_unqualified_list(client):
     assert item["ingredient_overlap"] == 0
 
 
+def test_search_recipes_by_keyword(client):
+    # 홈 화면 제철 재료 관련 레시피(2026-07-21, #req7) - 인가 없이 공개 조회된다.
+    res = client.get("/recommendation/recipes/search", params={"keyword": "두부", "limit": 5})
+    assert res.status_code == 200
+    items = res.json()
+    assert any(i["menu_name"] == "두부조림" for i in items)
+
+
+def test_search_recipes_no_keyword_returns_all(client):
+    res = client.get("/recommendation/recipes/search")
+    assert res.status_code == 200
+    assert len(res.json()) >= 1
+
+
+def test_get_alternative_returns_recipe_with_same_nutrition_group(client):
+    # 레시피 1(두부조림, 고단백, 재료: 두부/양파)과 레시피 4(닭가슴살구이, 고단백,
+    # 재료: 닭가슴살)는 재료가 완전히 무관하지만 같은 영양군이다 - #req6.
+    user_id, headers = _signup_with_pantry(client, "u_reco_alt_1", [])
+    res = client.get(f"/recommendation/{user_id}/alternative/{RECIPE_ID}", headers=headers)
+    assert res.status_code == 200
+    item = res.json()
+    assert item["id"] == 4
+    assert item["menu_name"] == "닭가슴살구이"
+    assert item["nutrition_group"] == "고단백"
+    assert item["protein_g"] == 25.0
+
+
+def test_get_alternative_nonexistent_recipe_returns_404(client):
+    user_id, headers = _signup_with_pantry(client, "u_reco_alt_2", [])
+    res = client.get(f"/recommendation/{user_id}/alternative/999999", headers=headers)
+    assert res.status_code == 404
+
+
 def test_get_recipe_detail(client):
     res = client.get(f"/recommendation/recipes/{RECIPE_ID}")
     assert res.status_code == 200

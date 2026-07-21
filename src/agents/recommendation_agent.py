@@ -313,6 +313,27 @@ def get_candidate_recipes(cur, profile: dict) -> list[dict]:
     return candidates
 
 
+def get_alternative_recipe(cur, profile: dict, current_recipe_id: int, nutrition_group: str) -> dict | None:
+    """"이 메뉴가 싫다면?" 버튼(2026-07-21, #req6) - 재료 겹침은 보지 않고, 같은 영양군
+    (nutrition_group)에 속하면서 칼로리가 가장 비슷한 다른 레시피 하나를 대신 추천한다.
+    get_candidate_recipes()를 그대로 재사용해서 알레르기/승인 여부 등 안전 필터는 똑같이
+    적용된다 - "재료와 무관해도 된다"는 요청이지 안전 필터까지 건너뛰라는 뜻은 아니다."""
+    candidates = get_candidate_recipes(cur, profile)
+    current = next((c for c in candidates if c["id"] == current_recipe_id), None)
+    same_group = [
+        c for c in candidates
+        if c["nutrition_group"] == nutrition_group and c["id"] != current_recipe_id
+    ]
+    if not same_group:
+        return None
+    current_calorie = current["calorie"] if current and current["calorie"] is not None else None
+    if current_calorie is not None:
+        same_group.sort(key=lambda c: abs((c["calorie"] or 0) - current_calorie))
+    else:
+        same_group.sort(key=lambda c: c["menu_name"])
+    return same_group[0]
+
+
 def get_recipe_by_id(cur, recipe_id: int) -> dict | None:
     """
     즐겨찾기 상세보기처럼, AI 추천 흐름을 다시 타지 않고 레시피 하나를 그대로 불러올 때 쓴다.

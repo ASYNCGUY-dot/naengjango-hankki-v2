@@ -42,7 +42,7 @@
     <tspan fill="#2f5d40"> </tspan>
     <tspan fill="#e8892c">한끼</tspan>
   </text>
-  <text x="130" y="282" text-anchor="middle" font-family="Pretendard, 'Malgun Gothic', sans-serif" font-size="13" fill="#7a7a72">
-    <tspan fill="#3f7d55" font-weight="600">AI</tspan>가 제안하는 건강한 오늘의 식단
+  <text x="130" y="286" text-anchor="middle" font-family="Pretendard, 'Malgun Gothic', sans-serif" font-size="18" fill="#63635c">
+    <tspan fill="#3f7d55" font-weight="700">AI</tspan>가 제안하는 건강한 오늘의 식단
   </text>
 </svg>

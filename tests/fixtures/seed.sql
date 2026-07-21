@@ -228,6 +228,19 @@ VALUES (
 );
 INSERT INTO recipe_tags (recipe_id, tag_type, tag_value) VALUES (3, 'ingredient', '파프리카');
 
+-- "이 메뉴가 싫다면?"(대체 추천, 2026-07-21, #req6) 테스트용 - 레시피 1(두부조림, 고단백,
+-- 120kcal)과 같은 영양군인 승인된 레시피 하나를 더 둔다. 재료는 완전히 무관하게(닭가슴살) 잡아서
+-- "재료와 관계없이 영양군만 맞으면 대체 추천된다"는 것을 검증할 수 있게 했다.
+INSERT INTO recipes (id, menu_name, cook_method, category, calorie, nutrients_json, image_url, youtube_url, source_api, steps_json, status)
+VALUES (
+    4, '닭가슴살구이', '구이', '일품', 130.0,
+    '{"energy_kcal": 130, "protein_g": 25, "fat_g": 3, "carbs_g": 2}',
+    NULL, NULL, 'public', '["닭가슴살을 굽는다"]', 'approved'
+);
+INSERT INTO recipe_tags (recipe_id, tag_type, tag_value) VALUES
+    (4, 'ingredient', '닭가슴살'),
+    (4, 'nutrition_group', '고단백');
+
 -- 최소 시드 데이터: 재료 즐겨찾기/검색 테스트용 실제 식품영양성분DB 값 (두부, P106-000000100-0001)
 INSERT INTO ingredient_catalog (
     food_code, name, db_group, energy_kcal, water_g, protein_g, fat_g, ash_g,
@@ -240,3 +253,12 @@ INSERT INTO ingredient_catalog (
     NULL, 0.03, 0.18, 0.16, 0.0,
     0.0, 80.0, 1.17
 );
+
+-- 검색 정렬 일반화 테스트용(2026-07-21, "3번 설정을 모든 재료에 적용해줘") - "고사리"는
+-- COMMON_INGREDIENT_NAMES 큐레이션 목록에 없는 재료다. 가나다순으로는 "고사리_데친것"이
+-- "고사리_생것"보다 앞에 오지만(ㄷ<ㅅ), 변형 우선순위 정렬이 큐레이션 목록 밖 재료에도
+-- 적용되면 "고사리_생것"이 먼저 나와야 한다.
+INSERT INTO ingredient_catalog (food_code, name, db_group) VALUES
+    ('TEST-GOSARI-DRIED', '고사리_말린것', '원재료성'),
+    ('TEST-GOSARI-BOILED', '고사리_데친것', '원재료성'),
+    ('TEST-GOSARI-RAW', '고사리_생것', '원재료성');

@@ -24,6 +24,28 @@ def get_like_count(cur, recipe_id: int) -> int:
     return cur.fetchone()[0]
 
 
+def get_popular_recipes(cur, limit: int = 10) -> list[dict]:
+    """좋아요(추천)가 많은 순으로 승인된 레시피를 가져온다.
+    "즐겨찾기" 화면의 "요즘 인기 있는 레시피" 섹션에서 쓴다(2026-07-21, #req5)."""
+    cur.execute(
+        """
+        SELECT r.id, r.menu_name, r.category, r.calorie, COUNT(l.id) AS like_count
+        FROM recipes r
+        JOIN recipe_likes l ON l.recipe_id = r.id
+        WHERE r.status = 'approved'
+        GROUP BY r.id, r.menu_name, r.category, r.calorie
+        ORDER BY like_count DESC, r.menu_name
+        LIMIT ?
+        """,
+        (limit,)
+    )
+    rows = cur.fetchall()
+    return [
+        {"id": r[0], "menu_name": r[1], "category": r[2], "calorie": r[3], "like_count": r[4]}
+        for r in rows
+    ]
+
+
 def toggle_like(cur, recipe_id: int, user_id: int) -> bool:
     """지금 상태의 반대로 바꾸고, 바뀐 뒤의 상태(True=추천함)를 반환한다."""
     if has_liked(cur, recipe_id, user_id):

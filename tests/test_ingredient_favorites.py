@@ -28,6 +28,17 @@ def test_search_ingredients_returns_results(client):
     assert "food_code" in body["items"][0]
 
 
+def test_search_ingredients_prefers_raw_over_variants_even_when_uncurated(client):
+    # "고사리"는 COMMON_INGREDIENT_NAMES 큐레이션 목록에 없다(2026-07-21, "3번 설정을
+    # 모든 재료에 적용해줘") - 가나다순이면 "고사리_데친것"이 "고사리_생것"보다 먼저 나오지만
+    # (ㄷ<ㅅ), 변형 우선순위 정렬이 일반화됐다면 "_생것"이 먼저 나와야 한다.
+    res = client.get("/ingredients/search", params={"keyword": "고사리", "limit": 10})
+    assert res.status_code == 200
+    names = [i["name"] for i in res.json()["items"]]
+    assert names.index("고사리_생것") < names.index("고사리_데친것")
+    assert names.index("고사리_생것") < names.index("고사리_말린것")
+
+
 def test_favorites_list_empty_before_any_toggle(client):
     user_id, headers = _signup(client, "u_favfood_1")
     res = client.get(f"/ingredients/{user_id}/favorites", headers=headers)
