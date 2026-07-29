@@ -632,7 +632,9 @@ class State(rx.State):
 
             data = await files[0].read()
             b64 = base64.b64encode(data).decode("utf-8")
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            # 타임아웃 추가(2026-07-26 발견) - 원래 지정이 없어서 OpenAI 응답이
+            # 느려지면 화면이 하염없이 멈춘 것처럼 보일 수 있었다.
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=25.0)
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{
