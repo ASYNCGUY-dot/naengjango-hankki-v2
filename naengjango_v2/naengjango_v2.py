@@ -659,7 +659,11 @@ class State(rx.State):
             else:
                 self.pantry_photo_error = "사진에서 식재료를 알아보지 못했어요. 다른 사진으로 시도해주세요."
         except Exception as e:
-            self.pantry_photo_error = f"재료 인식 실패: {e}"
+            # 사용자 화면에는 원인 파악용 SDK 예외를 그대로 노출하지 않는다(2026-07-26 발견 -
+            # 배포 환경에 OPENAI_API_KEY가 안 실려서 "Missing credentials" 같은 개발자용
+            # 메시지가 그대로 노출됐었다). 상세 원인은 서버 로그로만 남긴다.
+            print(f"[pantry_photo] 재료 인식 실패: {e}")
+            self.pantry_photo_error = "지금은 사진 인식을 이용할 수 없어요. 잠시 후 다시 시도하거나 아래에서 직접 재료를 입력해주세요."
         self.pantry_photo_uploading = False
 
     @rx.event
