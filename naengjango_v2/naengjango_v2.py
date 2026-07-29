@@ -1730,11 +1730,11 @@ def auth_form() -> rx.Component:
                 State.auth_mode == "login",
                 rx.button(
                     "로그인", on_click=State.login, loading=State.is_authenticating,
-                    width="100%", size="3",
+                    width="100%", size="3", color_scheme="orange",
                 ),
                 rx.button(
                     "회원가입", on_click=State.signup, loading=State.is_authenticating,
-                    width="100%", size="3",
+                    width="100%", size="3", color_scheme="orange",
                 ),
             ),
             spacing="4", width="100%", align="center",
@@ -1834,7 +1834,7 @@ def onboarding_form() -> rx.Component:
                     rx.button("다음", on_click=State.next_onboarding_step, flex="1"),
                     rx.button(
                         "프로필 저장", on_click=State.submit_profile,
-                        loading=State.is_submitting, flex="1",
+                        loading=State.is_submitting, flex="1", color_scheme="orange",
                     ),
                 ),
                 width="100%", spacing="2",
@@ -1860,7 +1860,10 @@ def pantry_item_row(item: dict) -> rx.Component:
         rx.spacer(),
         rx.icon_button(
             rx.icon("pencil", size=14),
-            size="1", variant="ghost", color_scheme="gray",
+            size="2", variant="ghost", color_scheme="gray",
+            # 터치 타겟 확대(2026-07-26, 디자인 진단 P0) - 아이콘은 작게 두되
+            # 히트 영역만 WCAG/HIG 최소 기준(44px)에 맞춘다.
+            min_width="44px", min_height="44px",
             # expiry_date가 None일 수 있어 문자열 인자로 넘기기 전에 ""로 바꿔준다
             on_click=lambda: State.open_expiry_edit(
                 item["id"], rx.cond(item["expiry_date"], item["expiry_date"], "")
@@ -1868,7 +1871,7 @@ def pantry_item_row(item: dict) -> rx.Component:
         ),
         rx.button(
             "삭제",
-            size="1",
+            size="2",
             color_scheme="red",
             variant="soft",
             on_click=lambda: State.remove_ingredient(item["id"]),
@@ -2151,6 +2154,37 @@ def recommendation_card(item: dict) -> rx.Component:
     )
 
 
+def recommendation_card_carousel() -> rx.Component:
+    """추천 카드를 세로 목록 대신 좌우로 넘겨보는 캐러셀로 보여준다(2026-07-26,
+    디자인 진단 P2 - 기획 문서에 있던 "스와이프 가능한 카드 UI" 방향). 실제 드래그
+    제스처를 서버 이벤트로 구현하면 매 프레임 왕복이 필요해 버벅이므로, 브라우저
+    네이티브 스크롤 스냅(scroll-snap)만으로 손가락 스와이프가 그대로 동작하게 한다."""
+    return rx.vstack(
+        rx.hstack(
+            rx.foreach(
+                State.filtered_recommendations,
+                lambda item: rx.box(
+                    recommendation_card(item),
+                    flex_shrink="0",
+                    width="85vw",
+                    max_width="380px",
+                    style={"scrollSnapAlign": "center"},
+                ),
+            ),
+            overflow_x="auto",
+            spacing="3",
+            width="100%",
+            padding_bottom="2",
+            style={"scrollSnapType": "x mandatory", "WebkitOverflowScrolling": "touch"},
+        ),
+        rx.text(
+            f"좌우로 넘겨서 다른 메뉴도 확인해보세요 · 총 {State.filtered_recommendations.length()}개",
+            size="1", color="gray", text_align="center", width="100%",
+        ),
+        width="100%", spacing="2",
+    )
+
+
 def recommend_filter_chip(label: str) -> rx.Component:
     return rx.button(
         label, size="1",
@@ -2248,6 +2282,9 @@ def recommendation_section() -> rx.Component:
             on_click=State.get_recommendations,
             loading=State.recommending,
             width="100%",
+            # 디자인 진단 P1(2026-07-26): 화면의 핵심 행동(CTA)에만 주황을 써서
+            # "다음에 뭘 눌러야 하는지"가 색으로 먼저 읽히게 한다.
+            color_scheme="orange",
         ),
         rx.cond(
             State.recommend_error != "",
@@ -2268,7 +2305,7 @@ def recommendation_section() -> rx.Component:
                     recommend_filter_chip("고지방"),
                     wrap="wrap", spacing="2", width="100%",
                 ),
-                rx.foreach(State.filtered_recommendations, recommendation_card),
+                recommendation_card_carousel(),
                 width="100%",
                 spacing="3",
             ),
@@ -2387,7 +2424,8 @@ def review_section() -> rx.Component:
                 rx.icon_button(
                     rx.icon("x", size=14),
                     on_click=State.clear_review_photo,
-                    size="1", variant="soft", color_scheme="gray",
+                    size="2", variant="soft", color_scheme="gray",
+                    min_width="44px", min_height="44px",
                 ),
                 align="center", spacing="2",
             ),
@@ -2852,6 +2890,18 @@ def favorite_list_item(item: dict) -> rx.Component:
     )
 
 
+def empty_state(icon_name: str, message: str, action_label: str = "", on_action=None) -> rx.Component:
+    """빈 화면 공통 컴포넌트(2026-07-26, 디자인 진단 P1) - 회색 텍스트 한 줄 대신
+    아이콘 + 문구, 다음 행동이 명확한 경우엔 버튼까지 함께 보여준다."""
+    children = [
+        rx.icon(icon_name, size=32, color=rx.color("gray", 8)),
+        rx.text(message, size="2", color="gray", text_align="center"),
+    ]
+    if action_label and on_action is not None:
+        children.append(rx.button(action_label, size="2", variant="soft", on_click=on_action))
+    return rx.vstack(*children, spacing="3", align="center", width="100%", padding_y="4")
+
+
 def favorites_list_view() -> rx.Component:
     return rx.vstack(
         rx.heading("나중에 볼 레시피", size="4"),
@@ -2862,7 +2912,10 @@ def favorites_list_view() -> rx.Component:
         rx.cond(
             State.favorites_list.length() > 0,
             rx.vstack(rx.foreach(State.favorites_list, favorite_list_item), width="100%", spacing="2"),
-            rx.text("즐겨찾기한 레시피가 없습니다.", color="gray", size="2"),
+            empty_state(
+                "bookmark", "즐겨찾기한 레시피가 없습니다.",
+                "추천 받으러 가기", lambda: State.set_main_tab("recommend"),
+            ),
         ),
         spacing="2",
         width="100%",
@@ -2903,7 +2956,7 @@ def popular_recipes_section() -> rx.Component:
         rx.cond(
             State.popular_recipes.length() > 0,
             rx.vstack(rx.foreach(State.popular_recipes, popular_recipe_list_item), width="100%", spacing="2"),
-            rx.text("아직 추천(좋아요)이 쌓인 레시피가 없습니다.", color="gray", size="2"),
+            empty_state("flame", "아직 추천(좋아요)이 쌓인 레시피가 없습니다."),
         ),
         spacing="2",
         width="100%",
@@ -2936,9 +2989,9 @@ def my_recipe_list_item(item: dict) -> rx.Component:
                 spacing="1",
             ),
             rx.spacer(),
-            rx.button("수정", size="1", variant="soft", on_click=lambda: State.start_edit_my_recipe(item["id"])),
+            rx.button("수정", size="2", variant="soft", on_click=lambda: State.start_edit_my_recipe(item["id"])),
             rx.button(
-                "삭제", size="1", color_scheme="red", variant="soft",
+                "삭제", size="2", color_scheme="red", variant="soft",
                 on_click=lambda: State.delete_my_recipe(item["id"]),
             ),
             width="100%",
@@ -3192,12 +3245,13 @@ def catalog_result_row(item: dict) -> rx.Component:
                     rx.icon("star", size=16, color=rx.color("amber", 9)),
                     rx.icon("star", size=16),
                 ),
-                size="1", variant="soft",
+                size="2", variant="soft",
+                min_width="44px", min_height="44px",
                 on_click=lambda: State.toggle_ingredient_favorite(item["food_code"]),
             ),
             rx.button(
                 "냉장고에 추가",
-                size="1",
+                size="2",
                 on_click=lambda: State.add_ingredient_from_catalog(item["name"]),
             ),
             width="100%",
@@ -3215,7 +3269,8 @@ def favorite_ingredient_row(item: dict) -> rx.Component:
         rx.text(f"{item['energy_kcal']}kcal", size="1", color="gray"),
         rx.icon_button(
             rx.icon("x", size=14),
-            size="1", variant="ghost", color_scheme="gray",
+            size="2", variant="ghost", color_scheme="gray",
+            min_width="44px", min_height="44px",
             on_click=lambda: State.toggle_ingredient_favorite(item["food_code"]),
         ),
         width="100%", align="center",
@@ -3232,7 +3287,7 @@ def favorite_ingredients_section() -> rx.Component:
         rx.cond(
             State.favorite_ingredients_list.length() > 0,
             rx.foreach(State.favorite_ingredients_list, favorite_ingredient_row),
-            rx.text("즐겨찾기한 재료가 없습니다.", color="gray", size="2"),
+            empty_state("carrot", "즐겨찾기한 재료가 없습니다."),
         ),
         width="100%", spacing="2",
     )
@@ -3615,7 +3670,7 @@ def fridge_view() -> rx.Component:
                 width="100%",
                 spacing="2",
             ),
-            rx.text("아직 등록된 재료가 없습니다. 위에서 검색하거나 칩을 눌러 담아보세요.", color="gray", size="2"),
+            empty_state("refrigerator", "아직 등록된 재료가 없습니다. 위에서 검색하거나 칩을 눌러 담아보세요."),
         ),
         ingredient_submission_section(),
         safety_result_panel(),
@@ -3669,21 +3724,39 @@ def mypage_view() -> rx.Component:
     )
 
 
+def tab_skeleton() -> rx.Component:
+    """탭 전환·레시피 상세 진입 중 콘텐츠 영역에만 보여주는 스켈레톤(2026-07-26,
+    디자인 진단 P2) - 예전엔 화면 전체를 흐리게 덮는 오버레이라 하단 네비게이션까지
+    반응이 멎어 "멈춘 느낌"을 오히려 강화했다. 이제는 콘텐츠 자리만 로딩 중 모양으로
+    바뀌고 헤더·하단 네비게이션은 그대로 반응한다."""
+    return rx.vstack(
+        rx.skeleton(height="140px", width="100%"),
+        rx.skeleton(height="20px", width="60%"),
+        rx.skeleton(height="80px", width="100%"),
+        rx.skeleton(height="80px", width="100%"),
+        spacing="3", width="100%", max_width="480px",
+    )
+
+
 def main_area() -> rx.Component:
     return rx.cond(
         State.submitted_user_id != None,  # noqa: E711
         rx.cond(
             State.profile_complete,
             rx.cond(
-                State.selected_recipe != None,  # noqa: E711
-                recipe_detail_view(),
-                rx.match(
-                    State.main_tab,
-                    ("fridge", fridge_view()),
-                    ("recommend", recommend_view()),
-                    ("favorites", favorites_view()),
-                    ("mypage", mypage_view()),
-                    home_view(),
+                State.is_page_loading,
+                tab_skeleton(),
+                rx.cond(
+                    State.selected_recipe != None,  # noqa: E711
+                    recipe_detail_view(),
+                    rx.match(
+                        State.main_tab,
+                        ("fridge", fridge_view()),
+                        ("recommend", recommend_view()),
+                        ("favorites", favorites_view()),
+                        ("mypage", mypage_view()),
+                        home_view(),
+                    ),
                 ),
             ),
             onboarding_form(),
@@ -3737,24 +3810,6 @@ def app_header() -> rx.Component:
     )
 
 
-def loading_overlay() -> rx.Component:
-    """탭 전환·레시피 상세 진입처럼 데이터를 새로 불러오는 동안 화면이 멈춘 것처럼
-    보이지 않도록 잠깐 띄우는 전체 화면 오버레이(2026-07-19 추가)."""
-    return rx.cond(
-        State.is_page_loading,
-        rx.center(
-            rx.vstack(
-                rx.spinner(size="3"),
-                rx.text("불러오는 중...", size="2", color="gray"),
-                spacing="3", align="center",
-            ),
-            position="fixed", inset="0",
-            background=rx.color("gray", 3, alpha=True),
-            z_index="1000",
-        ),
-    )
-
-
 def index() -> rx.Component:
     return rx.container(
         rx.vstack(
@@ -3767,7 +3822,6 @@ def index() -> rx.Component:
             padding_bottom="8em",
         ),
         bottom_nav(),
-        loading_overlay(),
     )
 
 
@@ -3777,6 +3831,17 @@ app = rx.App(
         rx.el.link(rel="manifest", href="/manifest.json"),
         rx.el.meta(name="theme-color", content="#3f7d55"),
         rx.el.link(rel="apple-touch-icon", href="/icon.svg"),
+        # 디자인 진단 P0(2026-07-26): 로고에만 있던 Pretendard 서체를 화면 전체에도
+        # 적용한다. Radix Themes 전체가 --default-font-family 변수를 참조하므로
+        # 이 변수 하나만 덮어써도 컴포넌트를 일일이 고칠 필요 없이 전 화면에 반영된다.
+        rx.el.link(
+            rel="stylesheet",
+            href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css",
+        ),
+        rx.el.style(
+            ":root { --default-font-family: 'Pretendard', -apple-system, "
+            "BlinkMacSystemFont, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif !important; }"
+        ),
     ],
 )
 app.add_page(index, on_load=State.register_service_worker)
