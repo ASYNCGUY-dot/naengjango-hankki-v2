@@ -1663,7 +1663,7 @@ def chip_input(
                             rx.icon("x", size=12, cursor="pointer", on_click=lambda: remove_event(item)),
                             spacing="1", align="center",
                         ),
-                        color_scheme="grass", variant="soft", size="2",
+                        color_scheme="green", variant="soft", size="2",
                     ),
                 ),
                 wrap="wrap", width="100%",
@@ -1746,7 +1746,7 @@ def auth_form() -> rx.Component:
 def onboarding_progress_dot(n: int) -> rx.Component:
     return rx.box(
         width="10px", height="10px", border_radius="50%",
-        background=rx.cond(State.onboarding_step >= n, rx.color("grass", 9), rx.color("gray", 5)),
+        background=rx.cond(State.onboarding_step >= n, rx.color("green", 9), rx.color("gray", 5)),
     )
 
 
@@ -1901,7 +1901,7 @@ def safety_overview_filter_chip(label: str, count) -> rx.Component:
     return rx.button(
         f"{label}({count})", size="1", radius="full",
         variant=rx.cond(State.safety_overview_filter == label, "solid", "soft"),
-        color_scheme=rx.cond(State.safety_overview_filter == label, "grass", "gray"),
+        color_scheme=rx.cond(State.safety_overview_filter == label, "green", "gray"),
         on_click=lambda: State.set_safety_overview_filter(label),
     )
 
@@ -2020,21 +2020,21 @@ def recommendation_reason(item: dict) -> rx.Component:
     # 구성한 재료 목록(recommend_ingredients) 기준인데도 "냉장고 재료 우선 추천"으로
     # 오해하게 만들었다 - 실제 계산 로직(recommendation.py의 recommend())은 이미 화면에서
     # 구성한 재료 목록만 쓰고 있어서(pantry 자동조회 없음), 문구만 그 사실에 맞게 바꾼다.
-    return rx.vstack(
-        rx.text(recommendation_nutrition_rationale(item), size="1", color="gray"),
-        rx.text(
-            rx.cond(
-                item["has_protein_match"],
-                "선택하신 재료로 만들 수 있어요.",
-                rx.cond(
-                    item["ingredient_overlap"],
-                    "선택하신 재료로 충분히 만들 수 있어요.",
-                    "선택하신 재료와 겹치는 게 적지만 참고해보세요.",
-                ),
-            ),
-            size="1", color="gray",
+    # 카드 재배치(2026-07-26, 디자인 진단 2차): 세로 두 줄이던 걸 한 줄에 나란히 배치해서
+    # 카드 세로 길이를 줄이고 이미지 비중을 상대적으로 키운다(Toss "한 줄로 말하기" 원칙).
+    ingredient_reason = rx.cond(
+        item["has_protein_match"],
+        "선택하신 재료로 만들 수 있어요.",
+        rx.cond(
+            item["ingredient_overlap"],
+            "선택하신 재료로 충분히 만들 수 있어요.",
+            "선택하신 재료와 겹치는 게 적지만 참고해보세요.",
         ),
-        spacing="0", width="100%", align="start",
+    )
+    return rx.hstack(
+        rx.text(recommendation_nutrition_rationale(item), size="1", color="gray"),
+        rx.text(ingredient_reason, size="1", color="gray"),
+        spacing="1", wrap="wrap", width="100%",
     )
 
 
@@ -2112,7 +2112,9 @@ def recommendation_card(item: dict) -> rx.Component:
         rx.vstack(
             rx.cond(
                 item["image_url"],
-                rx.image(src=item["image_url"], width="100%", height="140px",
+                # 카드 재배치(2026-07-26): 이미지 비중을 키워서(140->160px) 텍스트보다
+                # 먼저 눈에 들어오게 한다.
+                rx.image(src=item["image_url"], width="100%", height="160px",
                           object_fit="cover", border_radius="12px"),
             ),
             rx.hstack(
@@ -2122,7 +2124,7 @@ def recommendation_card(item: dict) -> rx.Component:
                     item["qualifies"],
                     # 문구 수정(2026-07-21, #req4) - "보유재료"는 냉장고를 연상시키지만
                     # 실제로는 이번 추천에 선택한 재료 기준이라 표현을 맞춘다.
-                    rx.badge("선택 재료 활용", color_scheme="grass"),
+                    rx.badge("선택 재료 활용", color_scheme="green"),
                     rx.badge("참고용", color_scheme="gray"),
                 ),
                 width="100%",
@@ -2133,13 +2135,15 @@ def recommendation_card(item: dict) -> rx.Component:
             rx.hstack(
                 rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
                 rx.spacer(),
-                rx.badge(f"겹치는 재료 {item['ingredient_overlap']}개", color_scheme="grass", variant="soft"),
+                rx.badge(f"겹치는 재료 {item['ingredient_overlap']}개", color_scheme="green", variant="soft"),
                 width="100%", align="center",
             ),
             rx.button("상세보기 (조리단계)", size="2", width="100%",
                       on_click=lambda: State.view_recipe(item["id"])),
             rx.button(
-                "이 메뉴가 싫다면?", size="2", variant="soft", width="100%",
+                # 카드 재배치(2026-07-26): soft->ghost로 낮춰서 주 행동(상세보기)과
+                # 시각적 무게 차이를 줘 위계를 명확히 한다.
+                "이 메뉴가 싫다면?", size="2", variant="ghost", width="100%",
                 on_click=lambda: State.get_alternative(item["id"]),
             ),
             rx.cond(
@@ -2189,7 +2193,7 @@ def recommend_filter_chip(label: str) -> rx.Component:
     return rx.button(
         label, size="1",
         variant=rx.cond(State.recommend_filter == label, "solid", "soft"),
-        color_scheme=rx.cond(State.recommend_filter == label, "grass", "gray"),
+        color_scheme=rx.cond(State.recommend_filter == label, "green", "gray"),
         radius="full",
         on_click=lambda: State.set_recommend_filter(label),
     )
@@ -2202,7 +2206,7 @@ def recommend_ingredient_chip(name: str) -> rx.Component:
             rx.icon("x", size=12, cursor="pointer", on_click=lambda: State.remove_recommend_ingredient(name)),
             spacing="1", align="center",
         ),
-        color_scheme="grass", variant="soft", size="2",
+        color_scheme="green", variant="soft", size="2",
     )
 
 
@@ -2317,7 +2321,7 @@ def recommendation_section() -> rx.Component:
 
 def recipe_ingredient_row(item: dict) -> rx.Component:
     return rx.hstack(
-        rx.icon("dot", size=14, color=rx.color("grass", 9)),
+        rx.icon("dot", size=14, color=rx.color("green", 9)),
         rx.text(item["display"], size="2"),
         width="100%", align="center", spacing="2",
     )
@@ -2468,7 +2472,7 @@ def missing_ingredient_row(m: dict, index: int) -> rx.Component:
     color = rx.cond(
         m["type"] == "omit",
         "gray",
-        rx.cond(m["type"] == "substitute", "grass", "amber"),
+        rx.cond(m["type"] == "substitute", "green", "amber"),
     )
     return rx.card(
         rx.vstack(
@@ -2497,7 +2501,7 @@ def substitution_detail_panel() -> rx.Component:
                 rx.vstack(
                     rx.badge(
                         rx.cond(item["type"] == "omit", "생략 가능", "대체 재료 추천"),
-                        color_scheme=rx.cond(item["type"] == "omit", "gray", "grass"),
+                        color_scheme=rx.cond(item["type"] == "omit", "gray", "green"),
                     ),
                     rx.text(item["suggestion"], size="2"),
                     align="start", spacing="2", width="100%",
@@ -2506,7 +2510,7 @@ def substitution_detail_panel() -> rx.Component:
             ),
             rx.callout(
                 "🙋 " + "재료가 없어도 대체·생략 팁을 참고하면 충분히 맛있게 만들 수 있어요!",
-                color_scheme="grass", width="100%", size="1",
+                color_scheme="green", width="100%", size="1",
             ),
             rx.button("적용하기", size="3", width="100%", on_click=State.close_substitution_detail),
             spacing="3", width="100%",
@@ -2535,7 +2539,7 @@ def substitution_section() -> rx.Component:
                         width="100%",
                         spacing="2",
                     ),
-                    rx.text("필요한 재료를 전부 보유하고 있습니다!", color="grass", size="2"),
+                    rx.text("필요한 재료를 전부 보유하고 있습니다!", color="green", size="2"),
                 ),
             ),
             width="100%",
@@ -2635,7 +2639,7 @@ def nutrition_row_item(row: dict) -> rx.Component:
         rx.text(f"{row['provided']}{row['unit']} / {row['target']}{row['unit']}", size="2", color="gray"),
         rx.cond(
             row["pct_of_daily"] != None,  # noqa: E711
-            rx.badge(f"{row['pct_of_daily']}%", color_scheme="grass", size="1"),
+            rx.badge(f"{row['pct_of_daily']}%", color_scheme="green", size="1"),
         ),
         rx.cond(
             row["already_supplemented"],
@@ -2808,7 +2812,7 @@ def recipe_detail_view() -> rx.Component:
                 rx.hstack(
                     rx.vstack(
                         rx.text("보유 재료 사용률", size="2", color="gray"),
-                        rx.heading(f"{State.substitution_coverage['coverage_pct']}%", size="7", color=rx.color("grass", 11)),
+                        rx.heading(f"{State.substitution_coverage['coverage_pct']}%", size="7", color=rx.color("green", 11)),
                         align="start", spacing="0",
                     ),
                     rx.spacer(),
@@ -2831,7 +2835,7 @@ def recipe_detail_view() -> rx.Component:
                     State.selected_recipe["youtube_url"],
                     rx.link(
                         "▶ 유튜브에서 조리 영상 보기", href=State.selected_recipe["youtube_url"],
-                        is_external=True, color=rx.color("grass", 11), weight="bold",
+                        is_external=True, color=rx.color("green", 11), weight="bold",
                     ),
                     rx.text("등록된 영상이 없습니다.", color="gray", size="2"),
                 ),
@@ -3085,7 +3089,7 @@ def admin_pending_recipe_row(item: dict) -> rx.Component:
                 align="start", spacing="0",
             ),
             rx.spacer(),
-            rx.button("승인", size="1", color_scheme="grass", on_click=lambda: State.admin_approve_recipe(item["id"])),
+            rx.button("승인", size="1", color_scheme="green", on_click=lambda: State.admin_approve_recipe(item["id"])),
             rx.button("거절", size="1", color_scheme="red", variant="soft",
                       on_click=lambda: State.admin_reject_recipe(item["id"])),
             width="100%", align="center",
@@ -3110,7 +3114,7 @@ def admin_pending_ingredient_row(item: dict) -> rx.Component:
                 align="start", spacing="0",
             ),
             rx.spacer(),
-            rx.button("승인", size="1", color_scheme="grass",
+            rx.button("승인", size="1", color_scheme="green",
                       on_click=lambda: State.admin_approve_ingredient(item["id"])),
             rx.button("거절", size="1", color_scheme="red", variant="soft",
                       on_click=lambda: State.admin_reject_ingredient(item["id"])),
@@ -3380,8 +3384,8 @@ def seasonal_section() -> rx.Component:
             rx.cond(
                 State.seasonal_matches.length() > 0,
                 rx.hstack(
-                    rx.text("보유 재료 중 제철 품목:", size="2", color="grass"),
-                    rx.foreach(State.seasonal_matches, lambda name: rx.badge(name, color_scheme="grass")),
+                    rx.text("보유 재료 중 제철 품목:", size="2", color="green"),
+                    rx.foreach(State.seasonal_matches, lambda name: rx.badge(name, color_scheme="green")),
                     wrap="wrap",
                     width="100%",
                 ),
@@ -3419,7 +3423,7 @@ def quick_add_chip(name: str) -> rx.Component:
     """누르면 즉시 냉장고에 추가되는 원탭 칩 - 예전 카테고리 그리드의 "선택 후 확인" 2단계를 없앴다."""
     return rx.badge(
         rx.hstack(rx.icon("plus", size=12), rx.text(name, size="2"), spacing="1", align="center"),
-        color_scheme="grass", variant="soft", size="2", cursor="pointer",
+        color_scheme="green", variant="soft", size="2", cursor="pointer",
         on_click=lambda: State.add_ingredient_from_catalog(name),
     )
 
@@ -3441,7 +3445,7 @@ def quick_add_chips_section() -> rx.Component:
 def pantry_photo_ingredient_chip(name: str) -> rx.Component:
     return rx.badge(
         name,
-        color_scheme=rx.cond(State.pantry_photo_selected.contains(name), "grass", "gray"),
+        color_scheme=rx.cond(State.pantry_photo_selected.contains(name), "green", "gray"),
         variant=rx.cond(State.pantry_photo_selected.contains(name), "solid", "soft"),
         size="2",
         cursor="pointer",
@@ -3455,7 +3459,7 @@ def pantry_photo_upload_section() -> rx.Component:
             State.pantry_photo_detected.length() == 0,
             rx.upload(
                 rx.vstack(
-                    rx.icon("camera", size=28, color=rx.color("grass", 9)),
+                    rx.icon("camera", size=28, color=rx.color("green", 9)),
                     rx.text("냉장고 사진을 올리면 AI가 재료를 찾아드려요", size="2", color="gray"),
                     rx.text("클릭하거나 파일을 끌어다 놓으세요", size="1", color="gray"),
                     align="center", spacing="2", padding="4",
@@ -3463,7 +3467,7 @@ def pantry_photo_upload_section() -> rx.Component:
                 id="pantry_photo_upload",
                 accept={"image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"]},
                 max_files=1,
-                border=f"2px dashed {rx.color('grass', 7)}",
+                border=f"2px dashed {rx.color('green', 7)}",
                 border_radius="12px",
                 width="100%",
                 on_drop=State.handle_pantry_photo_upload(
@@ -3780,7 +3784,9 @@ def bottom_nav() -> rx.Component:
         rx.hstack(
             bottom_nav_button("홈", "house", "home"),
             bottom_nav_button("냉장고", "refrigerator", "fridge"),
-            bottom_nav_button("추천", "sparkles", "recommend"),
+            # 디자인 진단 2차(2026-07-26): sparkles는 요즘 거의 모든 AI 기능에 붙는
+            # 범용 아이콘이라 "추천 메뉴"라는 맥락을 못 준다. 포크/나이프로 직관적으로.
+            bottom_nav_button("추천", "utensils", "recommend"),
             bottom_nav_button("즐겨찾기", "heart", "favorites"),
             bottom_nav_button("마이페이지", "user", "mypage"),
             width="100%",
