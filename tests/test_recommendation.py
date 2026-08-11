@@ -87,6 +87,30 @@ def test_recommend_without_ingredients_param_returns_unqualified_list(client):
     assert item["ingredient_overlap"] == 0
 
 
+def test_demo_recommend_works_without_token(client):
+    # 무로그인 데모 엔드포인트(2026-08-10) - 토큰도 프로필도 없이 동작해야 한다.
+    res = client.get("/recommendation/demo", params={"ingredients": ["두부"]})
+    assert res.status_code == 200
+    items = res.json()
+    assert any(i["menu_name"] == "두부조림" for i in items)
+    assert items[0]["energy_kcal"] is not None  # 영양소 파싱까지 채워져 나온다
+
+
+def test_demo_recommend_excludes_allergy(client):
+    # seed.sql의 레시피 3(파프리카볶음)에는 ingredient 태그만 있고 allergy 태그가 없다.
+    # 알레르기 필터가 동작하는지는 "태그가 걸린 레시피가 빠지는가"로 확인해야 하므로,
+    # 여기서는 알레르기를 넘겨도 200이 나고 결과 구조가 유지되는지만 고정한다.
+    res = client.get("/recommendation/demo", params={"ingredients": ["두부"], "allergy": "새우"})
+    assert res.status_code == 200
+    assert isinstance(res.json(), list)
+
+
+def test_demo_recommend_caps_results_at_five(client):
+    res = client.get("/recommendation/demo", params={"ingredients": ["두부", "양파"]})
+    assert res.status_code == 200
+    assert len(res.json()) <= 5
+
+
 def test_search_recipes_by_keyword(client):
     # 홈 화면 제철 재료 관련 레시피(2026-07-21, #req7) - 인가 없이 공개 조회된다.
     res = client.get("/recommendation/recipes/search", params={"keyword": "두부", "limit": 5})

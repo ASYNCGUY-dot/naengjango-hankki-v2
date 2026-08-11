@@ -75,6 +75,36 @@ class RecipeDetail(BaseModel):
     image_url: str | None
 
 
+# "/demo"는 "/{user_id}"(user_id: int)보다 먼저 등록해야 한다 - 뒤에 두면 "demo"가
+# user_id 자리에 매칭 시도되다 int 변환에 실패해 422가 난다(#req5의 popular과 같은 문제).
+@router.get("/demo", response_model=list[RecommendationItem])
+def recommend_demo(
+    ingredients: list[str] = Query(default=[]),
+    allergy: str = "",
+    cur: sqlite3.Cursor = Depends(get_db),
+):
+    """로그인 없이 추천 로직만 체험하는 데모용 엔드포인트(2026-08-10).
+
+    실제 서비스는 회원가입과 5단계 온보딩을 거쳐야 추천 화면에 닿는다. 포트폴리오
+    링크를 받은 사람이 그 과정 없이 핵심 기능을 바로 볼 수 있도록 인가 없이 열어둔다.
+    프로필은 DB에서 읽지 않고 쿼리로 받은 알레르기만으로 즉석에서 만든다 - 원본
+    로직이 프로필에서 실제로 참조하는 값이 알레르기 하나뿐이라 가능하다.
+
+    공개 엔드포인트이므로 개인 데이터(pantry/즐겨찾기 등)는 일절 건드리지 않고,
+    남용 시 서버 부하가 커지지 않도록 재료 개수와 결과 개수를 상한으로 묶는다.
+    """
+    user_ingredients = [name.strip() for name in ingredients if name.strip()][:20]
+    profile = {"allergy": (allergy or "").strip()}
+
+    candidates = recommendation_agent.get_candidate_recipes(cur, profile)
+    scored = recommendation_agent.score_by_ingredients(cur, candidates, user_ingredients)
+
+    top = scored[:5]
+    for item in top:
+        item.update(_parse_nutrients(item.get("nutrients_json")))
+    return top
+
+
 @router.get("/{user_id}", response_model=list[RecommendationItem])
 def recommend(
     user_id: int,

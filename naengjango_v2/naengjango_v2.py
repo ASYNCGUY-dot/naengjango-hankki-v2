@@ -3822,6 +3822,192 @@ def app_header() -> rx.Component:
     )
 
 
+class DemoState(rx.State):
+    """무로그인 체험 페이지(/demo) 전용 상태(2026-08-10).
+
+    메인 State와 분리한 이유: 메인 State는 로그인 토큰·프로필·냉장고 목록을 전제로
+    돌아가는데, 데모는 그중 무엇도 없이 열려야 한다. 섞으면 로그인 안 한 방문자가
+    메인 State의 초기화 경로를 건드리게 된다.
+    """
+
+    demo_ingredients: str = ""
+    demo_allergy: str = ""
+    demo_results: list[dict] = []
+    demo_loading: bool = False
+    demo_error: str = ""
+    demo_fetched: bool = False
+
+    @rx.event
+    def set_field(self, field: str, value: str):
+        # 메인 State가 쓰는 것과 같은 헬퍼(Reflex가 자동 setter를 만들어주지 않는다).
+        setattr(self, field, value)
+
+    @rx.event
+    async def run_demo(self):
+        names = [n.strip() for n in self.demo_ingredients.replace("\n", ",").split(",") if n.strip()]
+        if not names:
+            self.demo_error = "재료를 한 개 이상 입력해주세요. 예: 두부, 양파, 대파"
+            self.demo_results = []
+            self.demo_fetched = False
+            return
+
+        self.demo_loading = True
+        self.demo_error = ""
+        yield
+        try:
+            response = requests.get(
+                f"{API_BASE}/recommendation/demo",
+                params={"ingredients": names, "allergy": self.demo_allergy.strip()},
+                # 추천 계산이 레시피 1,148개를 훑는 방식이라 넉넉하게 잡는다.
+                timeout=60,
+            )
+        except requests.RequestException:
+            self.demo_error = "서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+            self.demo_loading = False
+            return
+        if response.status_code == 200:
+            self.demo_results = response.json()
+            self.demo_fetched = True
+        else:
+            self.demo_error = f"추천을 불러오지 못했어요 ({response.status_code})"
+        self.demo_loading = False
+
+    @rx.event
+    def use_example(self, ingredients: str):
+        self.demo_ingredients = ingredients
+        return DemoState.run_demo
+
+
+def demo_example_chip(label: str) -> rx.Component:
+    return rx.button(
+        label, size="2", variant="soft", radius="full",
+        on_click=lambda: DemoState.use_example(label),
+    )
+
+
+def demo_result_card(item: dict) -> rx.Component:
+    """데모 전용 카드 - 메인 recommendation_card는 즐겨찾기/대체추천처럼 로그인이
+    필요한 동작에 묶여 있어서, 여기서는 보여주기만 하는 형태로 따로 만든다."""
+    return rx.card(
+        rx.vstack(
+            rx.cond(
+                item["image_url"],
+                rx.image(src=item["image_url"], width="100%", height="160px",
+                         object_fit="cover", border_radius="12px"),
+            ),
+            rx.hstack(
+                rx.text(item["menu_name"], weight="bold", size="4"),
+                rx.spacer(),
+                rx.cond(
+                    item["qualifies"],
+                    rx.badge("선택 재료 활용", color_scheme="green"),
+                    rx.badge("참고용", color_scheme="gray"),
+                ),
+                width="100%", align="center",
+            ),
+            recommendation_reason(item),
+            recommendation_nutrient_row(item),
+            rx.hstack(
+                rx.text(f"{item['category']} · {item['calorie']}kcal", size="2", color="gray"),
+                rx.spacer(),
+                rx.badge(f"겹치는 재료 {item['ingredient_overlap']}개",
+                         color_scheme="green", variant="soft"),
+                width="100%", align="center",
+            ),
+            spacing="2", width="100%",
+        ),
+        width="100%", variant="classic",
+    )
+
+
+def demo_page() -> rx.Component:
+    """로그인 없이 추천 로직만 체험하는 공개 페이지.
+
+    실제 서비스는 회원가입 + 5단계 온보딩을 거쳐야 추천 화면에 닿는다. 포트폴리오
+    링크를 받은 사람에게는 그 과정이 진입 장벽이라, 핵심 가치인 "재료를 넣으면
+    추천이 나온다"만 떼어내 바로 보여준다.
+    """
+    return rx.container(
+        rx.vstack(
+            rx.image(src="/logo.svg", height="120px"),
+            rx.heading("재료만 넣어보세요", size="7", text_align="center"),
+            rx.text(
+                "공공데이터 기반 레시피 1,148개 중에서 그 재료를 가장 잘 활용하는 메뉴를 골라드려요. "
+                "알레르기 재료가 들어간 레시피는 후보에서 아예 제외합니다.",
+                size="2", color="gray", text_align="center",
+            ),
+            rx.text("로그인 없이 바로 체험하는 버전입니다.", size="1", color="gray"),
+
+            rx.input(
+                placeholder="가지고 있는 재료 (예: 두부, 양파, 대파)",
+                value=DemoState.demo_ingredients,
+                on_change=lambda v: DemoState.set_field("demo_ingredients", v),
+                on_key_down=lambda k: rx.cond(k == "Enter", DemoState.run_demo(), rx.noop()),
+                size="3", width="100%",
+            ),
+            rx.input(
+                placeholder="알레르기 재료 (선택 · 예: 우유, 새우)",
+                value=DemoState.demo_allergy,
+                on_change=lambda v: DemoState.set_field("demo_allergy", v),
+                size="2", width="100%",
+            ),
+            rx.button(
+                "추천 받기", on_click=DemoState.run_demo, loading=DemoState.demo_loading,
+                width="100%", size="3", color_scheme="orange",
+            ),
+
+            rx.text("이렇게 해보세요", size="1", color="gray", width="100%"),
+            rx.hstack(
+                demo_example_chip("두부, 양파, 대파"),
+                demo_example_chip("닭가슴살, 브로콜리, 현미"),
+                demo_example_chip("돼지고기, 김치, 두부"),
+                wrap="wrap", spacing="2", width="100%",
+            ),
+
+            rx.cond(
+                DemoState.demo_error != "",
+                rx.callout(DemoState.demo_error, color_scheme="red", width="100%"),
+            ),
+            rx.cond(
+                DemoState.demo_loading,
+                rx.vstack(
+                    rx.skeleton(height="160px", width="100%"),
+                    rx.skeleton(height="20px", width="60%"),
+                    spacing="3", width="100%",
+                ),
+            ),
+            rx.cond(
+                DemoState.demo_fetched & (DemoState.demo_results.length() == 0),
+                rx.text("조건에 맞는 결과가 없어요. 재료를 바꾸거나 더 넣어보세요.",
+                        size="2", color="gray"),
+            ),
+            rx.cond(
+                DemoState.demo_results.length() > 0,
+                rx.vstack(
+                    rx.foreach(DemoState.demo_results, demo_result_card),
+                    width="100%", spacing="3",
+                ),
+            ),
+
+            rx.divider(),
+            rx.link(
+                rx.button("냉장고 관리·안전정보까지 전체 서비스 보기", variant="soft",
+                          width="100%", size="3"),
+                href="/", width="100%",
+            ),
+            rx.text(
+                "데이터 출처: 식품의약품안전처 조리식품 레시피DB·식품영양성분DB, "
+                "농림수산식품교육문화정보원 레시피 재료정보. "
+                "영양 안내는 일반 정보 제공 목적이며 의료적 진단·처방이 아닙니다.",
+                size="1", color="gray", text_align="center",
+            ),
+
+            spacing="4", align="center", width="100%",
+            max_width="480px", padding_y="6",
+        ),
+    )
+
+
 def index() -> rx.Component:
     return rx.container(
         rx.vstack(
@@ -3857,3 +4043,5 @@ app = rx.App(
     ],
 )
 app.add_page(index, on_load=State.register_service_worker)
+# 무로그인 체험 페이지(2026-08-10) - 포트폴리오/공모전 링크로 공유하는 용도.
+app.add_page(demo_page, route="/demo", title="냉장고 한끼 - 재료로 메뉴 추천 체험")
