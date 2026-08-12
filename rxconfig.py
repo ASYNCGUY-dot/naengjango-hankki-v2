@@ -1,7 +1,15 @@
+import os
+
 import reflex as rx
 
 config = rx.Config(
     app_name="naengjango_v2",
+    # 프론트(Vercel 정적 호스팅)가 접속할 Reflex 백엔드 주소(2026-08-12).
+    # Reflex Cloud 배포가 막혀서 백엔드를 Render로 옮겼고, 프론트를 빌드할 때
+    # 이 값이 번들에 박힌다. 환경변수로 넘기는 것만으로는 빌드에 반영되지 않아
+    # (localhost:8000이 그대로 들어갔다) 여기서 명시적으로 읽는다.
+    # 로컬 개발에서는 환경변수가 없으므로 기존 기본값 그대로 동작한다.
+    api_url=os.getenv("API_URL", "http://localhost:8000"),
     # 상태 락 만료 상향(2026-08-11). 프로덕션 로그(2026-08-07)에서 로그인이
     # LockExpiredError로 실패하는 게 확인됐다. 원인은 login 이벤트 하나가 백엔드 API를
     # 순차로 여러 번 부르기 때문이다 - 로그인 자체(10초) 뒤에 프로필·냉장고·인기영상·
