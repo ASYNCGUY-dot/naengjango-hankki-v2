@@ -1,7 +1,10 @@
 # Reflex Cloud 배포 장애 정리 (2026-08-11)
 
-> 상태: **미해결 / Reflex 지원팀 응답 대기 중**
-> 영향 범위: 프론트엔드 배포만 불가. **운영 중인 서비스와 백엔드는 정상.**
+> 상태: **우회 완료(2026-08-12)** — 아래 6번 C안(호스팅 이전)으로 해소했다.
+> Reflex Cloud 자체의 장애는 여전히 미해결이고 지원팀 응답도 대기 중이지만,
+> 배포 경로를 Vercel + Render로 옮겨서 더 이상 막혀 있지 않다.
+> 영향 범위: 프론트엔드 배포만 불가했고, **백엔드는 처음부터 정상**이었다.
+> 이전 결과는 문서 끝 8번 참고.
 
 ---
 
@@ -212,3 +215,60 @@ Reflex 앱도 Python 프로세스이므로 웹 서비스로 띄울 수 있다.
 | 미반영 | `/demo` 페이지, 로그인 락 수정 |
 
 pending이 해소되면 **배포 명령 한 번**으로 두 변경이 함께 반영된다.
+
+---
+
+## 8. 해소 경과 — Vercel + Render 이전 (2026-08-12)
+
+Reflex Cloud의 pending은 끝내 풀리지 않았고, 지원팀(Sriman)도 "배포는 성공했지만
+상태가 Deploying에 갇히는 문제를 고치는 중"이라고만 답한 상태였다. 하루를 더 기다리는
+대신 6번의 **C안(호스팅 이전)** 을 실행했다.
+
+### 무엇을 어디에 올렸나
+
+Reflex 앱은 브라우저와 websocket으로 상태를 주고받기 때문에 통째로 정적 호스팅에
+올릴 수 없다. 그래서 둘로 나눴다.
+
+| 구성 | 호스팅 | 주소 |
+|---|---|---|
+| 프론트엔드 (정적 번들) | Vercel | `https://naengjango-hankki-demo.vercel.app` |
+| Reflex Python 백엔드 | Render (`naengjango-hankki-v2-reflex`) | `https://naengjango-hankki-v2-reflex.onrender.com` |
+| FastAPI 백엔드 (기존) | Render (`naengjango-hankki-v2-api`) | `https://naengjango-hankki-v2-api.onrender.com` |
+
+이전 전에 걸렸던 유일한 미검증 항목은 "무료 티어 512MB에 Reflex 백엔드가 들어가는가"
+였는데, 로컬에서 `--backend-only`로 띄워 실측한 결과 **약 110MB**라 여유가 있었다.
+
+### 이전 과정에서 걸린 문제
+
+**프론트 번들에 `localhost:8000`이 그대로 박혔다.** `API_URL` 환경변수만 설정하고
+`reflex export`를 돌렸더니 빌드 산출물(`assets/reflex-env-*.js`)에 로컬 주소가
+들어갔다. Reflex가 이 값을 빌드 시점의 config에서 읽기 때문이다.
+`rxconfig.py`에서 `api_url=os.getenv("API_URL", "http://localhost:8000")`으로
+명시적으로 읽도록 고친 뒤 재빌드해서 해결했다.
+
+### 검증 결과
+
+- `/` (로그인 화면), `/demo` 모두 HTTP 200
+- `/demo`에서 예시 재료(두부·양파·대파)로 추천 실행 → **레시피 5건 정상 반환**
+  (두부스테이크·치즈 두부 튀김 등, 영양소 수치까지 포함)
+- 즉 Vercel 프론트 → Render Reflex 백엔드(websocket) → Render FastAPI → Supabase
+  전 구간이 동작한다.
+- 로드된 정적 자산 전부 200. `/sitemap-index.xml`만 404인데, export 산출물에
+  포함되지 않은 파일이라 화면 동작에는 영향이 없다.
+
+### 앞으로의 배포 절차
+
+프론트를 고쳤을 때는 `reflex deploy` 대신 아래 두 단계를 밟는다.
+
+```bash
+API_URL="https://naengjango-hankki-v2-reflex.onrender.com" reflex export --frontend-only --no-zip
+cd .web/build/client && vercel --prod
+```
+
+백엔드(FastAPI·Reflex 양쪽)는 GitHub `master` 푸시 시 Render가 자동 배포한다.
+
+### 남은 것
+
+- Reflex Cloud의 pending 배포 2건(`2ce7a213-…`, `912b118e-…`)은 그대로 방치한다.
+  더 이상 배포 경로로 쓰지 않으므로 서비스에 영향이 없다.
+- 기존 Reflex Cloud URL은 구버전을 계속 서빙 중이다. 정리 여부는 나중에 결정한다.
