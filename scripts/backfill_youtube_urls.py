@@ -58,7 +58,11 @@ def main(limit: int = 50):
             quota_exceeded = True
             break
 
-        cur.execute("UPDATE recipes SET youtube_url = %s WHERE id = %s", (url, recipe_id))
+        # 검색 결과가 없어도 NULL을 그대로 두면 WHERE youtube_url IS NULL 조건에 계속 걸려서
+        # 다음 실행마다 같은 레시피를 영원히 재시도하게 된다. 빈 문자열을 저장해 "시도했지만
+        # 못 찾음"을 표시하고 다음 실행 대상에서 제외한다. UI(rx.cond)는 빈 문자열도 NULL과
+        # 동일하게 "영상 없음"으로 처리하므로 안전하다.
+        cur.execute("UPDATE recipes SET youtube_url = %s WHERE id = %s", (url or "", recipe_id))
         conn.commit()
         status = url or "(검색 결과 없음)"
         print(f"[{recipe_id}] {menu_name} -> {status}")
